@@ -22,10 +22,10 @@ typedef struct
 int display_menu();
 int load_records(MaintenanceRecord **records, int *count);
 int display_records(MaintenanceRecord *records, int count);
-// int add_record(MaintenanceRecord **records, int *count);
+int add_record(MaintenanceRecord **records, int *count);
 int search_records(MaintenanceRecord *records, int count);
-// int update_record(MaintenanceRecord *records, int count);
-// int delete_record(MaintenanceRecord **records, int *count);
+int update_record(MaintenanceRecord *records, int count);
+int delete_record(MaintenanceRecord **records, int *count);
 static void read_line_prompt(const char *prompt, char *buffer, size_t size);
 static void trim_newline(char *s);
 static void strip(char *s);
@@ -36,30 +36,30 @@ int main()
     int record_count = 0;
     char choice[8];
 
-    load_records(&records, &record_count);
-
+    
     int num_choice = 0;
     do
     {
         display_menu();
         read_line_prompt("Enter your choice: ", choice, sizeof(choice));
         num_choice = atoi(choice);
+        load_records(&records, &record_count);
         switch (num_choice)
         {
         case 1:
             display_records(records, record_count);
             break;
         case 2:
-            // add_record(&records, &record_count);
+            add_record(&records, &record_count);
             break;
         case 3:
             search_records(records, record_count);
             break;
         case 4:
-            // update_record(records, record_count);
+            update_record(records, record_count);
             break;
         case 5:
-            // delete_record(&records, &record_count);
+            delete_record(&records, &record_count);
             break;
         case 6:
             printf("Exiting...\n");
@@ -246,3 +246,149 @@ int search_records(MaintenanceRecord *records, int count)
     }
     return 0;
 }
+
+int add_record(MaintenanceRecord **records, int *count)
+{
+    MaintenanceRecord new_record;
+    read_line_prompt("Enter machine name: ", new_record.machineName, sizeof(new_record.machineName));
+    read_line_prompt("Enter machine ID: ", new_record.machineID, sizeof(new_record.machineID));
+    read_line_prompt("Enter maintenance date (YYYY-MM-DD): ", new_record.maintenanceDate, sizeof(new_record.maintenanceDate));
+    read_line_prompt("Enter maintenance details: ", new_record.maintenanceDetails, sizeof(new_record.maintenanceDetails));
+
+    if (strlen(new_record.machineName) == 0 || strlen(new_record.machineID) == 0 ||
+        strlen(new_record.maintenanceDate) == 0 || strlen(new_record.maintenanceDetails) == 0)
+    {
+        printf("All fields are required. Record not added.\n");
+        return -1;
+    }
+
+    FILE *file = fopen(CSV_FILE, "a");
+    if (!file)
+    {
+        perror("Failed to open file for appending");
+        return -1;
+    }
+    fprintf(file, "%s,%s,%s,%s\n",
+            new_record.machineName,
+            new_record.machineID,
+            new_record.maintenanceDate,
+            new_record.maintenanceDetails);
+    fclose(file);
+
+    MaintenanceRecord *new_records = realloc(*records, (*count + 1) * sizeof(MaintenanceRecord));
+    if (!new_records)
+    {
+        perror("Failed to allocate memory for new record");
+        return -1;
+    }
+    *records = new_records;
+    (*records)[*count] = new_record;
+    (*count)++;
+
+    printf("Record added successfully.\n");
+    return 0;
+}
+
+int update_record(MaintenanceRecord *records, int count)
+{
+    char id[MAX_ID];
+    read_line_prompt("Enter machine ID of the record to update: ", id, sizeof(id));
+    if (strlen(id) == 0)
+    {
+        printf("Machine ID cannot be empty.\n");
+        return -1;
+    }
+
+    for (int i = 0; i < count; i++)
+    {
+        if (strcmp(records[i].machineID, id) == 0)
+        {
+            printf("Current details:\n");
+            printf("Machine Name: %s\n", records[i].machineName);
+            printf("Maintenance Date: %s\n", records[i].maintenanceDate);
+            printf("Maintenance Details: %s\n", records[i].maintenanceDetails);
+
+            read_line_prompt("Enter new machine name (leave blank to keep current): ", records[i].machineName, sizeof(records[i].machineName));
+            read_line_prompt("Enter new maintenance date (YYYY-MM-DD, leave blank to keep current): ", records[i].maintenanceDate, sizeof(records[i].maintenanceDate));
+            read_line_prompt("Enter new maintenance details (leave blank to keep current): ", records[i].maintenanceDetails, sizeof(records[i].maintenanceDetails));
+
+            FILE *file = fopen(CSV_FILE, "w");
+            if (!file)
+            {
+                perror("Failed to open file for writing");
+                return -1;
+            }
+            fprintf(file, "MachineName,MachineID,MaintenanceDate,MaintenanceDetails");
+            for (int j = 0; j < count; j++)
+            {
+                fprintf(file, "%s,%s,%s,%s\n",
+                        records[j].machineName,
+                        records[j].machineID,
+                        records[j].maintenanceDate,
+                        records[j].maintenanceDetails);
+            }
+            fclose(file);
+
+            printf("Record updated successfully.\n");
+            return 0;
+        }
+    }
+
+    printf("No record found with Machine ID '%s'.\n", id);
+    return -1;
+}
+
+int delete_record(MaintenanceRecord **records, int *count)
+{
+    char id[MAX_ID];
+    read_line_prompt("Enter machine ID of the record to delete: ", id, sizeof(id));
+    if (strlen(id) == 0)
+    {
+        printf("Machine ID cannot be empty.\n");
+        return -1;
+    }
+
+    for (int i = 0; i < *count; i++)
+    {
+        if (strcmp((*records)[i].machineID, id) == 0)
+        {
+            for (int j = i; j < *count - 1; j++)
+            {
+                (*records)[j] = (*records)[j + 1];
+            }
+            (*count)--;
+
+            FILE *file = fopen(CSV_FILE, "w");
+            if (!file)
+            {
+                perror("Failed to open file for writing");
+                return -1;
+            }
+            fprintf(file, "MachineName,MachineID,MaintenanceDate,MaintenanceDetails");
+            for (int j = 0; j < *count; j++)
+            {
+                fprintf(file, "%s,%s,%s,%s\n",
+                        (*records)[j].machineName,
+                        (*records)[j].machineID,
+                        (*records)[j].maintenanceDate,
+                        (*records)[j].maintenanceDetails);
+            }
+            fclose(file);
+
+            MaintenanceRecord *new_records = realloc(*records, (*count) * sizeof(MaintenanceRecord));
+            if (!new_records && *count > 0)
+            {
+                perror("Failed to reallocate memory after deletion");
+                return -1;
+            }
+            *records = new_records;
+
+            printf("Record deleted successfully.\n");
+            return 0;
+        }
+    }
+
+    printf("No record found with Machine ID '%s'.\n", id);
+    return -1;
+}
+
