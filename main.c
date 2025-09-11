@@ -158,15 +158,23 @@ int load_records(MaintenanceRecord **records, int *count)
         token = strtok(line, ",");
         if (token)
             strncpy((*records)[*count].machineName, token, MAX_NAME);
+        else
+            (*records)[*count].machineName[0] = '\0';
         token = strtok(NULL, ",");
         if (token)
             strncpy((*records)[*count].machineID, token, MAX_ID);
+        else
+            (*records)[*count].machineID[0] = '\0';
         token = strtok(NULL, ",");
         if (token)
             strncpy((*records)[*count].maintenanceDate, token, MAX_DATE);
+        else
+            (*records)[*count].maintenanceDate[0] = '\0';
         token = strtok(NULL, ",");
         if (token)
             strncpy((*records)[*count].maintenanceDetails, token, MAX_DETAILS);
+        else
+            (*records)[*count].maintenanceDetails[0] = '\0';
 
         (*count)++;
         if (*count >= capacity)
@@ -262,6 +270,18 @@ int add_record(MaintenanceRecord **records, int *count)
         return -1;
     }
 
+    if (*records != NULL && *count > 0)
+    {
+        for (int i = 0; i < *count; i++)
+        {
+            if (strcmp((*records)[i].machineID, new_record.machineID) == 0)
+            {
+                printf("Machine ID '%s' already exists. Record not added.\n", new_record.machineID);
+                return -1;
+            }
+        }
+    }
+
     FILE *file = fopen(CSV_FILE, "a");
     if (!file)
     {
@@ -318,7 +338,8 @@ int update_record(MaintenanceRecord *records, int count)
                 perror("Failed to open file for writing");
                 return -1;
             }
-            fprintf(file, "MachineName,MachineID,MaintenanceDate,MaintenanceDetails");
+            
+            fprintf(file, "MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n");
             for (int j = 0; j < count; j++)
             {
                 fprintf(file, "%s,%s,%s,%s\n",
@@ -364,7 +385,8 @@ int delete_record(MaintenanceRecord **records, int *count)
                 perror("Failed to open file for writing");
                 return -1;
             }
-            fprintf(file, "MachineName,MachineID,MaintenanceDate,MaintenanceDetails");
+
+            fprintf(file, "MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n");
             for (int j = 0; j < *count; j++)
             {
                 fprintf(file, "%s,%s,%s,%s\n",
