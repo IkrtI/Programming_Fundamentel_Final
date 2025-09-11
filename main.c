@@ -23,11 +23,9 @@ int display_menu();
 int load_records(MaintenanceRecord **records, int *count);
 int display_records(MaintenanceRecord *records, int count);
 // int add_record(MaintenanceRecord **records, int *count);
-// int search_records(MaintenanceRecord *records, int count);
+int search_records(MaintenanceRecord *records, int count);
 // int update_record(MaintenanceRecord *records, int count);
 // int delete_record(MaintenanceRecord **records, int *count);
-// int sanitize_input(char *input);
-// int display_records(MaintenanceRecord *records, int count);
 static void read_line_prompt(const char *prompt, char *buffer, size_t size);
 static void trim_newline(char *s);
 static void strip(char *s);
@@ -55,7 +53,7 @@ int main()
             // add_record(&records, &record_count);
             break;
         case 3:
-            // search_records(records, record_count);
+            search_records(records, record_count);
             break;
         case 4:
             // update_record(records, record_count);
@@ -209,5 +207,42 @@ int display_records(MaintenanceRecord *records, int count)
                records[i].maintenanceDetails);
     }
     printf("\n");
+    return 0;
+}
+
+int search_records(MaintenanceRecord *records, int count)
+{
+    char query[MAX_NAME];
+    read_line_prompt("Enter machine name or ID to search: ", query, sizeof(query));
+    if (strlen(query) == 0)
+    {
+        printf("Search query cannot be empty.\n");
+        return -1;
+    }
+
+    int found = 0;
+    printf("\nSearch Results:\n");
+    printf("%-20s %-10s %-12s %-30s\n", "Machine Name", "Machine ID", "Date", "Details");
+    printf("-------------------------------------------------------------------------------\n");
+    for (int i = 0; i < count; i++)
+    {
+        if (strstr(records[i].machineName, query) || strstr(records[i].machineID, query))
+        {
+            printf("%-20s %-10s %-12s %-30s\n",
+                   records[i].machineName,
+                   records[i].machineID,
+                   records[i].maintenanceDate,
+                   records[i].maintenanceDetails);
+            found++;
+        }
+    }
+    if (found == 0)
+    {
+        printf("No records found matching the query '%s'.\n", query);
+    }
+    else
+    {
+        printf("\nTotal %d record(s) found.\n", found);
+    }
     return 0;
 }
