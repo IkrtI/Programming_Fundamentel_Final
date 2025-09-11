@@ -1,5 +1,5 @@
 #!/bin/bash
 
 # gcc build
-gcc -o MachineManager main.c
+gcc -std=c11 -O2 -Wall -Wextra -o MachineManager main.c
 ./MachineManager
