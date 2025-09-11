@@ -1,0 +1,17 @@
+MachineName,MachineID,MaintenanceDate,MaintenanceDetails
+CNC Machine,M001,2025-08-01,Oil Change
+Drill Press,M002,2025-08-03,Blade Replacement
+Lathe,M003,2025-08-05,Chuck Cleaning
+Milling Machine,M004,2025-08-07,Coolant Flush
+Grinder,M005,2025-08-09,Wheel Dressing
+Hydraulic Press,M006,2025-08-10,Seal Inspection
+Welding Station,M007,2025-08-11,Torch Calibration
+Air Compressor,M008,2025-08-12,Filter Replacement
+3D Printer,M009,2025-08-13,Nozzle Change
+Conveyor,M010,2025-08-14,Belt Tension Adjust
+Robot Arm,M011,2025-08-15,Joint Lubrication
+Forklift,M012,2025-08-16,Battery Maintenance
+Packaging Line,M013,2025-08-17,Sensor Alignment
+Cutting Saw,M014,2025-08-18,Guide Rail Cleaning
+Heat Treatment,M015,2025-08-19,Thermocouple Check
+CMM,M016,2025-08-20,Probe Recalibration
