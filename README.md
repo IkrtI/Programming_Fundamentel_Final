@@ -2,31 +2,76 @@
 
 แอปคอนโซลขนาดเล็ก (ข้ามแพลตฟอร์ม) สำหรับ **ดู/เพิ่ม/ค้นหา/อัปเดต/ลบ** ข้อมูลการบำรุงรักษาเครื่องจักรที่บันทึกในไฟล์ CSV
 
+> **เทคโนโลยี**: C11, ใช้ standard library ล้วน (ไม่มีไลบรารีภายนอก)  
+> **ไฟล์ข้อมูล**: `maintenance.csv` ในไดเรกทอรีทำงานปัจจุบัน
+
 ---
 
 ## ✨ ความสามารถ (Features)
 
 - แสดงรายการข้อมูลบำรุงรักษาเป็นตาราง
-- เพิ่มรายการใหม่
-- ค้นหาจาก **ชื่อเครื่อง (MachineName)** หรือ **รหัสเครื่อง (MachineID)**
+- เพิ่มรายการใหม่ (ป้องกัน `MachineID` ซ้ำ)
+- ค้นหาจาก **ชื่อเครื่อง (MachineName)** หรือ **รหัสเครื่อง (MachineID)** (ค้นหาแบบ substring)
 - อัปเดตรายการด้วย `MachineID`
 - ลบรายการด้วย `MachineID`
+- สคีมาของ CSV: `MachineName,MachineID,MaintenanceDate,MaintenanceDetails`
 
 ---
 
-## 🚀 Get started
+## 🚀 เริ่มต้นใช้งาน
 
 ### Build
 
 **Linux/macOS/Windows (GCC):**
 ```bash
-gcc -std=c11 -O2 -Wall -Wextra -o MachineManager main.c
-
+gcc -std=c11 -Wall -Wextra -O2 -o maint main.c
 ```
 
 ### Run
-```sh
-./MachineManager         # หรือ MachineManager.exe บน Windows
+
+```bash
+./maint         # หรือ maint.exe บน Windows
+```
+
+เมนูจะมีลักษณะดังนี้
+
+```
+Machine Maintenance Manager
+1. View Machine Maintenance
+2. Add record
+3. Search record
+4. Update record
+5. Delete record
+6. Exit
 ```
 
 ---
+
+## 🗂️ สคีมาของ CSV และตัวอย่างไฟล์
+
+**ชื่อไฟล์**: `maintenance.csv` (ต้องอยู่ในไดเรกทอรีทำงาน)  
+**บรรทัดหัวตาราง (จำเป็นต้องมี):**
+```
+MachineName,MachineID,MaintenanceDate,MaintenanceDetails
+```
+
+**ตัวอย่างข้อมูล:**
+```
+Hydraulic Press,HP-001,2025-08-01,Changed hydraulic fluid
+CNC Mill,CNC-12,2025-08-03,Spindle alignment and lubrication
+Laser Cutter,LC-07,2025-08-05,Replaced air filter
+```
+
+---
+
+## 🧭 หลักการทำงาน (Design Notes)
+
+- **โหลดข้อมูล**: ในทุก ๆ รอบลูปของเมนู โปรแกรมจะอ่าน `maintenance.csv` เข้าหน่วยความจำใหม่
+- **เพิ่ม (Add)**: เขียนบรรทัดใหม่ต่อท้าย `maintenance.csv`
+- **อัปเดต/ลบ**: เขียนไฟล์ CSV ใหม่ทั้งไฟล์ (พร้อมหัวตาราง) หลังแก้ไข
+- **ทำความสะอาดอินพุต**: อ่านด้วย `fgets` แล้วตัด `\r\n` และเว้นวรรคหัว-ท้าย ด้วย `trim_newline` และ `strip`
+- **เอกลักษณ์**: ใช้ `MachineID` เป็นคีย์ที่ต้องไม่ซ้ำ (ตรวจตอนเพิ่ม)
+- **ค้นหา**: ค้นหาแบบ case-sensitive ด้วย `strstr` ใน `MachineName` และ `MachineID`
+- **พฤติกรรมการอัปเดต**: ณ ตอนนี้หากกรอกค่าว่างในการอัปเดต ฟิลด์นั้นจะถูกบันทึกเป็นว่าง (ยังไม่รองรับ “ปล่อยว่างเพื่อคงค่าเดิม”)
+
+
