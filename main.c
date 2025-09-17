@@ -25,6 +25,7 @@ void add_record(void);
 void search_records(void);
 void update_record(void);
 void delete_record(void);
+int safe_input(char *buffer, int size, const char *prompt);
 
 int main(void)
 {
@@ -33,14 +34,16 @@ int main(void)
     if (ensure_csv_exists() != 0)
         return 1;
 
+    // Load records once at startup
+    if (load_records() != 0)
+    {
+        printf("Failed to load records.\n");
+        return 1;
+    }
+
     do
     {
         display_menu();
-        if (load_records() != 0)
-        {
-            printf("Failed to load records.\n");
-            return 1;
-        }
         printf("Enter your choice: ");
         if (scanf("%d", &choice) != 1)
         {
@@ -63,18 +66,30 @@ int main(void)
             break;
         case 2:
             add_record();
-            save_all_records();
+            if (save_all_records() == 0)
+            {
+                // Reload to reflect changes
+                load_records();
+            }
             break;
         case 3:
             search_records();
             break;
         case 4:
             update_record();
-            save_all_records();
+            if (save_all_records() == 0)
+            {
+                // Reload to reflect changes
+                load_records();  
+            }
             break;
         case 5:
             delete_record();
-            save_all_records();
+            if (save_all_records() == 0)
+            {
+                // Reload to reflect changes
+                load_records();
+            }
             break;
         case 6:
             printf("Exiting...\n");
@@ -220,13 +235,17 @@ void add_record(void)
 
     char n[MAX_NAME], id[MAX_ID], d[MAX_DATE], det[MAX_DETAILS];
 
-    printf("Enter machine name: ");
-    scanf(" %63[^\n]", n);
-    getchar();
+    if (safe_input(n, sizeof(n), "Enter machine name: ") != 0)
+    {
+        printf("Error reading machine name.\n");
+        return;
+    }
 
-    printf("Enter machine ID: ");
-    scanf(" %31[^\n]", id);
-    getchar();
+    if (safe_input(id, sizeof(id), "Enter machine ID: ") != 0)
+    {
+        printf("Error reading machine ID.\n");
+        return;
+    }
 
     for (int i = 0; i < record_count; ++i)
     {
@@ -237,13 +256,17 @@ void add_record(void)
         }
     }
 
-    printf("Enter maintenance date (YYYY-MM-DD): ");
-    scanf(" %15[^\n]", d);
-    getchar();
+    if (safe_input(d, sizeof(d), "Enter maintenance date (YYYY-MM-DD): ") != 0)
+    {
+        printf("Error reading maintenance date.\n");
+        return;
+    }
 
-    printf("Enter maintenance details: ");
-    scanf(" %255[^\n]", det);
-    getchar();
+    if (safe_input(det, sizeof(det), "Enter maintenance details: ") != 0)
+    {
+        printf("Error reading maintenance details.\n");
+        return;
+    }
 
     strncpy(machineName[record_count], n, MAX_NAME - 1);
     machineName[record_count][MAX_NAME - 1] = '\0';
@@ -266,9 +289,11 @@ void search_records(void)
     char q[64];
     int found = 0;
 
-    printf("Enter machine name or ID to search: ");
-    scanf(" %63[^\n]", q);
-    getchar();
+    if (safe_input(q, sizeof(q), "Enter machine name or ID to search: ") != 0)
+    {
+        printf("Error reading search query.\n");
+        return;
+    }
 
     printf("\nSearch Results:\n");
     printf("%-20s %-12s %-12s %-30s\n", "Machine Name", "Machine ID", "Date", "Details");
@@ -294,9 +319,11 @@ void update_record(void)
     char id[MAX_ID];
     char buf[MAX_DETAILS];
 
-    printf("Enter machine ID to update: ");
-    scanf(" %31[^\n]", id);
-    getchar();
+    if (safe_input(id, sizeof(id), "Enter machine ID to update: ") != 0)
+    {
+        printf("Error reading machine ID.\n");
+        return;
+    }
 
     for (int i = 0; i < record_count; ++i)
     {
@@ -305,34 +332,40 @@ void update_record(void)
             printf("Current Name: %s\n", machineName[i]);
             printf("New name (leave blank to keep): ");
             buf[0] = '\0';
-            fgets(buf, sizeof(buf), stdin);
-            if (buf[0] != '\n' && buf[0] != '\0')
+            if (fgets(buf, sizeof(buf), stdin) != NULL)
             {
-                buf[strcspn(buf, "\r\n")] = '\0';
-                strncpy(machineName[i], buf, MAX_NAME - 1);
-                machineName[i][MAX_NAME - 1] = '\0';
+                if (buf[0] != '\n' && buf[0] != '\0')
+                {
+                    buf[strcspn(buf, "\r\n")] = '\0';
+                    strncpy(machineName[i], buf, MAX_NAME - 1);
+                    machineName[i][MAX_NAME - 1] = '\0';
+                }
             }
 
             printf("Current Date: %s\n", maintenanceDate[i]);
             printf("New date YYYY-MM-DD (leave blank to keep): ");
             buf[0] = '\0';
-            fgets(buf, sizeof(buf), stdin);
-            if (buf[0] != '\n' && buf[0] != '\0')
+            if (fgets(buf, sizeof(buf), stdin) != NULL)
             {
-                buf[strcspn(buf, "\r\n")] = '\0';
-                strncpy(maintenanceDate[i], buf, MAX_DATE - 1);
-                maintenanceDate[i][MAX_DATE - 1] = '\0';
+                if (buf[0] != '\n' && buf[0] != '\0')
+                {
+                    buf[strcspn(buf, "\r\n")] = '\0';
+                    strncpy(maintenanceDate[i], buf, MAX_DATE - 1);
+                    maintenanceDate[i][MAX_DATE - 1] = '\0';
+                }
             }
 
             printf("Current Details: %s\n", maintenanceDetails[i]);
             printf("New details (leave blank to keep): ");
             buf[0] = '\0';
-            fgets(buf, sizeof(buf), stdin);
-            if (buf[0] != '\n' && buf[0] != '\0')
+            if (fgets(buf, sizeof(buf), stdin) != NULL)
             {
-                buf[strcspn(buf, "\r\n")] = '\0';
-                strncpy(maintenanceDetails[i], buf, MAX_DETAILS - 1);
-                maintenanceDetails[i][MAX_DETAILS - 1] = '\0';
+                if (buf[0] != '\n' && buf[0] != '\0')
+                {
+                    buf[strcspn(buf, "\r\n")] = '\0';
+                    strncpy(maintenanceDetails[i], buf, MAX_DETAILS - 1);
+                    maintenanceDetails[i][MAX_DETAILS - 1] = '\0';
+                }
             }
 
             printf("Record updated.\n");
@@ -345,9 +378,12 @@ void update_record(void)
 void delete_record(void)
 {
     char id[MAX_ID];
-    printf("Enter machine ID to delete: ");
-    scanf(" %31[^\n]", id);
-    getchar();
+    
+    if (safe_input(id, sizeof(id), "Enter machine ID to delete: ") != 0)
+    {
+        printf("Error reading machine ID.\n");
+        return;
+    }
 
     for (int i = 0; i < record_count; ++i)
     {
@@ -367,4 +403,17 @@ void delete_record(void)
         }
     }
     printf("No record with Machine ID '%s'.\n", id);
+}
+
+int safe_input(char *buffer, int size, const char *prompt)
+{
+    printf("%s", prompt);
+    if (fgets(buffer, size, stdin) == NULL)
+    {
+        return -1;
+    }
+    
+    // Remove trailing newline
+    buffer[strcspn(buffer, "\r\n")] = '\0';
+    return 0;
 }

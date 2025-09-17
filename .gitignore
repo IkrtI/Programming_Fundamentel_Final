@@ -1,2 +1,6 @@
 MachineManager
+maint
 maintenance.csv
+maintenance_large.csv
+*.exe
+*.o
