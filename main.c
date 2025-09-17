@@ -1,416 +1,370 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 
 #define CSV_FILE "maintenance.csv"
 
+#define MAX_RECORDS 1000
 #define MAX_NAME 64
 #define MAX_ID 32
 #define MAX_DATE 16
 #define MAX_DETAILS 256
-#define LINE_BUF 1024
 
-typedef struct
+char machineName[MAX_RECORDS][MAX_NAME];
+char machineID[MAX_RECORDS][MAX_ID];
+char maintenanceDate[MAX_RECORDS][MAX_DATE];
+char maintenanceDetails[MAX_RECORDS][MAX_DETAILS];
+int record_count = 0;
+
+void display_menu(void);
+int ensure_csv_exists(void);
+int load_records(void);
+int save_all_records(void);
+void display_records(void);
+void add_record(void);
+void search_records(void);
+void update_record(void);
+void delete_record(void);
+
+int main(void)
 {
-    char machineName[MAX_NAME];
-    char machineID[MAX_ID];
-    char maintenanceDate[MAX_DATE];
-    char maintenanceDetails[MAX_DETAILS];
-} MaintenanceRecord;
+    int choice;
 
-int display_menu();
-int load_records(MaintenanceRecord **records, int *count);
-int display_records(MaintenanceRecord *records, int count);
-int add_record(MaintenanceRecord **records, int *count);
-int search_records(MaintenanceRecord *records, int count);
-int update_record(MaintenanceRecord *records, int count);
-int delete_record(MaintenanceRecord **records, int *count);
-static void read_line_prompt(const char *prompt, char *buffer, size_t size);
-static void trim_newline(char *s);
-static void strip(char *s);
+    if (ensure_csv_exists() != 0)
+        return 1;
 
-int main()
-{
-    MaintenanceRecord *records = NULL;
-    int record_count = 0;
-    char choice[8];
-
-    
-    int num_choice = 0;
     do
     {
         display_menu();
-        read_line_prompt("Enter your choice: ", choice, sizeof(choice));
-        num_choice = atoi(choice);
-        load_records(&records, &record_count);
-        switch (num_choice)
+        if (load_records() != 0)
+        {
+            printf("Failed to load records.\n");
+            return 1;
+        }
+        printf("Enter your choice: ");
+        if (scanf("%d", &choice) != 1)
+        {
+            int c;
+            while ((c = getchar()) != '\n' && c != EOF)
+            {
+            }
+            choice = 0;
+        }
+
+        int ch;
+        while ((ch = getchar()) != '\n' && ch != EOF)
+        {
+        }
+
+        switch (choice)
         {
         case 1:
-            display_records(records, record_count);
+            display_records();
             break;
         case 2:
-            add_record(&records, &record_count);
+            add_record();
+            save_all_records();
             break;
         case 3:
-            search_records(records, record_count);
+            search_records();
             break;
         case 4:
-            update_record(records, record_count);
+            update_record();
+            save_all_records();
             break;
         case 5:
-            delete_record(&records, &record_count);
+            delete_record();
+            save_all_records();
             break;
         case 6:
             printf("Exiting...\n");
-            return 0;
+            break;
         default:
             printf("Invalid choice. Please try again.\n");
         }
-    } while (num_choice != 6);
+    } while (choice != 6);
 
-    free(records);
     return 0;
 }
 
-int display_menu()
+void display_menu(void)
 {
-    printf("Machine Maintenance Manager\n");
+    printf("\nMachine Maintenance Manager\n");
     printf("1. View Machine Maintenance\n");
     printf("2. Add record\n");
     printf("3. Search record\n");
     printf("4. Update record\n");
     printf("5. Delete record\n");
-    printf("6. Exit\n\n");
+    printf("6. Exit\n");
+}
+
+int ensure_csv_exists(void)
+{
+    FILE *f = fopen(CSV_FILE, "r");
+    if (f)
+    {
+        fclose(f);
+        return 0;
+    }
+
+    f = fopen(CSV_FILE, "w");
+    if (!f)
+    {
+        perror("Create CSV");
+        return -1;
+    }
+    fprintf(f, "MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n");
+    if (fclose(f) != 0)
+    {
+        perror("Close CSV");
+        return -1;
+    }
     return 0;
 }
 
-static void read_line_prompt(const char *prompt, char *buf, size_t bufsz)
-{
-    printf("%s", prompt);
-    if (fgets(buf, (int)bufsz, stdin) == NULL)
-    {
-        buf[0] = '\0';
-        return;
-    }
-    trim_newline(buf);
-    strip(buf);
-}
-
-static void trim_newline(char *s)
-{
-    if (!s)
-        return;
-    s[strcspn(s, "\r\n")] = '\0';
-}
-
-static void strip(char *s)
-{
-    if (!s)
-        return;
-    size_t i = 0, n = strlen(s);
-    while (i < n && isspace((unsigned char)s[i]))
-        i++;
-    if (i > 0)
-        memmove(s, s + i, n - i + 1);
-    n = strlen(s);
-    while (n > 0 && isspace((unsigned char)s[n - 1]))
-    {
-        s[n - 1] = '\0';
-        --n;
-    }
-}
-
-int load_records(MaintenanceRecord **records, int *count)
+int load_records(void)
 {
     FILE *file = fopen(CSV_FILE, "r");
     if (!file)
     {
-        perror("Failed to open file");
+        perror("Open CSV");
         return -1;
     }
 
-    char line[LINE_BUF];
-    int capacity = 10;
-    *records = malloc(capacity * sizeof(MaintenanceRecord));
-    if (!*records)
-    {
-        perror("Failed to allocate memory");
-        fclose(file);
-        return -1;
-    }
-    *count = 0;
-
-    if (fgets(line, sizeof(line), file) == NULL)
+    char header[512];
+    if (fgets(header, sizeof(header), file) == NULL)
     {
         fclose(file);
         return 0;
+    } /* ไม่มีข้อมูล */
+
+    record_count = 0;
+    while (record_count < MAX_RECORDS)
+    {
+        char n[MAX_NAME], id[MAX_ID], d[MAX_DATE], det[MAX_DETAILS];
+        int matched = fscanf(file, " %63[^,],%31[^,],%15[^,],%255[^\n]\n", n, id, d, det);
+        if (matched != 4)
+            break;
+
+        strncpy(machineName[record_count], n, MAX_NAME - 1);
+        machineName[record_count][MAX_NAME - 1] = '\0';
+
+        strncpy(machineID[record_count], id, MAX_ID - 1);
+        machineID[record_count][MAX_ID - 1] = '\0';
+
+        strncpy(maintenanceDate[record_count], d, MAX_DATE - 1);
+        maintenanceDate[record_count][MAX_DATE - 1] = '\0';
+
+        strncpy(maintenanceDetails[record_count], det, MAX_DETAILS - 1);
+        maintenanceDetails[record_count][MAX_DETAILS - 1] = '\0';
+
+        record_count++;
     }
 
-    while (fgets(line, sizeof(line), file))
+    if (fclose(file) != 0)
     {
-        trim_newline(line);
-        strip(line);
-        if (strlen(line) == 0)
-            continue;
+        perror("Close CSV after read");
+        return -1;
+    }
+    return 0;
+}
 
-        char *token;
-        token = strtok(line, ",");
-        if (token)
-            strncpy((*records)[*count].machineName, token, MAX_NAME);
-        else
-            (*records)[*count].machineName[0] = '\0';
-        token = strtok(NULL, ",");
-        if (token)
-            strncpy((*records)[*count].machineID, token, MAX_ID);
-        else
-            (*records)[*count].machineID[0] = '\0';
-        token = strtok(NULL, ",");
-        if (token)
-            strncpy((*records)[*count].maintenanceDate, token, MAX_DATE);
-        else
-            (*records)[*count].maintenanceDate[0] = '\0';
-        token = strtok(NULL, ",");
-        if (token)
-            strncpy((*records)[*count].maintenanceDetails, token, MAX_DETAILS);
-        else
-            (*records)[*count].maintenanceDetails[0] = '\0';
+int save_all_records(void)
+{
+    FILE *file = fopen(CSV_FILE, "w");
+    if (!file)
+    {
+        perror("Open CSV for write");
+        return -1;
+    }
 
-        (*count)++;
-        if (*count >= capacity)
+    fprintf(file, "MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n");
+    for (int i = 0; i < record_count; ++i)
+    {
+        fprintf(file, "%s,%s,%s,%s\n",
+                machineName[i], machineID[i], maintenanceDate[i], maintenanceDetails[i]);
+    }
+
+    if (fclose(file) != 0)
+    {
+        perror("Close CSV after write");
+        return -1;
+    }
+    return 0;
+}
+
+void display_records(void)
+{
+    if (record_count == 0)
+    {
+        printf("No maintenance records.\n");
+        return;
+    }
+
+    printf("\n%-20s %-12s %-12s %-30s\n", "Machine Name", "Machine ID", "Date", "Details");
+    printf("-------------------------------------------------------------------------------\n");
+    for (int i = 0; i < record_count; ++i)
+    {
+        printf("%-20s %-12s %-12s %-30s\n",
+               machineName[i], machineID[i], maintenanceDate[i], maintenanceDetails[i]);
+    }
+}
+
+void add_record(void)
+{
+    if (record_count >= MAX_RECORDS)
+    {
+        printf("Storage full.\n");
+        return;
+    }
+
+    char n[MAX_NAME], id[MAX_ID], d[MAX_DATE], det[MAX_DETAILS];
+
+    printf("Enter machine name: ");
+    scanf(" %63[^\n]", n);
+    getchar();
+
+    printf("Enter machine ID: ");
+    scanf(" %31[^\n]", id);
+    getchar();
+
+    for (int i = 0; i < record_count; ++i)
+    {
+        if (strcmp(machineID[i], id) == 0)
         {
-            capacity *= 2;
-            MaintenanceRecord *new_records = realloc(*records, capacity * sizeof(MaintenanceRecord));
-            if (!new_records)
-            {
-                perror("Failed to reallocate memory");
-                free(*records);
-                fclose(file);
-                return -1;
-            }
-            *records = new_records;
+            printf("Machine ID '%s' already exists.\n", id);
+            return;
         }
     }
 
-    fclose(file);
-    return 0;
+    printf("Enter maintenance date (YYYY-MM-DD): ");
+    scanf(" %15[^\n]", d);
+    getchar();
+
+    printf("Enter maintenance details: ");
+    scanf(" %255[^\n]", det);
+    getchar();
+
+    strncpy(machineName[record_count], n, MAX_NAME - 1);
+    machineName[record_count][MAX_NAME - 1] = '\0';
+
+    strncpy(machineID[record_count], id, MAX_ID - 1);
+    machineID[record_count][MAX_ID - 1] = '\0';
+
+    strncpy(maintenanceDate[record_count], d, MAX_DATE - 1);
+    maintenanceDate[record_count][MAX_DATE - 1] = '\0';
+
+    strncpy(maintenanceDetails[record_count], det, MAX_DETAILS - 1);
+    maintenanceDetails[record_count][MAX_DETAILS - 1] = '\0';
+
+    record_count++;
+    printf("Record added.\n");
 }
 
-int display_records(MaintenanceRecord *records, int count)
+void search_records(void)
 {
-    if (count == 0)
-    {
-        printf("No maintenance records available.\n");
-        return 0;
-    }
-
-    printf("\n%-20s %-10s %-12s %-30s\n", "Machine Name", "Machine ID", "Date", "Details");
-    printf("-------------------------------------------------------------------------------\n");
-    for (int i = 0; i < count; i++)
-    {
-        printf("%-20s %-10s %-12s %-30s\n",
-               records[i].machineName,
-               records[i].machineID,
-               records[i].maintenanceDate,
-               records[i].maintenanceDetails);
-    }
-    printf("\n");
-    return 0;
-}
-
-int search_records(MaintenanceRecord *records, int count)
-{
-    char query[MAX_NAME];
-    read_line_prompt("Enter machine name or ID to search: ", query, sizeof(query));
-    if (strlen(query) == 0)
-    {
-        printf("Search query cannot be empty.\n");
-        return -1;
-    }
-
+    char q[64];
     int found = 0;
+
+    printf("Enter machine name or ID to search: ");
+    scanf(" %63[^\n]", q);
+    getchar();
+
     printf("\nSearch Results:\n");
-    printf("%-20s %-10s %-12s %-30s\n", "Machine Name", "Machine ID", "Date", "Details");
+    printf("%-20s %-12s %-12s %-30s\n", "Machine Name", "Machine ID", "Date", "Details");
     printf("-------------------------------------------------------------------------------\n");
-    for (int i = 0; i < count; i++)
+
+    for (int i = 0; i < record_count; ++i)
     {
-        if (strstr(records[i].machineName, query) || strstr(records[i].machineID, query))
+        if (strstr(machineName[i], q) != NULL || strstr(machineID[i], q) != NULL)
         {
-            printf("%-20s %-10s %-12s %-30s\n",
-                   records[i].machineName,
-                   records[i].machineID,
-                   records[i].maintenanceDate,
-                   records[i].maintenanceDetails);
+            printf("%-20s %-12s %-12s %-30s\n",
+                   machineName[i], machineID[i], maintenanceDate[i], maintenanceDetails[i]);
             found++;
         }
     }
     if (found == 0)
-    {
-        printf("No records found matching the query '%s'.\n", query);
-    }
+        printf("No records found for '%s'.\n", q);
     else
-    {
-        printf("\nTotal %d record(s) found.\n", found);
-    }
-    return 0;
+        printf("\nTotal %d record(s).\n", found);
 }
 
-int add_record(MaintenanceRecord **records, int *count)
-{
-    MaintenanceRecord new_record;
-    read_line_prompt("Enter machine name: ", new_record.machineName, sizeof(new_record.machineName));
-    read_line_prompt("Enter machine ID: ", new_record.machineID, sizeof(new_record.machineID));
-    read_line_prompt("Enter maintenance date (YYYY-MM-DD): ", new_record.maintenanceDate, sizeof(new_record.maintenanceDate));
-    read_line_prompt("Enter maintenance details: ", new_record.maintenanceDetails, sizeof(new_record.maintenanceDetails));
-
-    if (strlen(new_record.machineName) == 0 || strlen(new_record.machineID) == 0 ||
-        strlen(new_record.maintenanceDate) == 0 || strlen(new_record.maintenanceDetails) == 0)
-    {
-        printf("All fields are required. Record not added.\n");
-        return -1;
-    }
-
-    if (*records != NULL && *count > 0)
-    {
-        for (int i = 0; i < *count; i++)
-        {
-            if (strcmp((*records)[i].machineID, new_record.machineID) == 0)
-            {
-                printf("Machine ID '%s' already exists. Record not added.\n", new_record.machineID);
-                return -1;
-            }
-        }
-    }
-
-    FILE *file = fopen(CSV_FILE, "a");
-    if (!file)
-    {
-        perror("Failed to open file for appending");
-        return -1;
-    }
-    fprintf(file, "%s,%s,%s,%s\n",
-            new_record.machineName,
-            new_record.machineID,
-            new_record.maintenanceDate,
-            new_record.maintenanceDetails);
-    fclose(file);
-
-    MaintenanceRecord *new_records = realloc(*records, (*count + 1) * sizeof(MaintenanceRecord));
-    if (!new_records)
-    {
-        perror("Failed to allocate memory for new record");
-        return -1;
-    }
-    *records = new_records;
-    (*records)[*count] = new_record;
-    (*count)++;
-
-    printf("Record added successfully.\n");
-    return 0;
-}
-
-int update_record(MaintenanceRecord *records, int count)
+void update_record(void)
 {
     char id[MAX_ID];
-    read_line_prompt("Enter machine ID of the record to update: ", id, sizeof(id));
-    if (strlen(id) == 0)
-    {
-        printf("Machine ID cannot be empty.\n");
-        return -1;
-    }
+    char buf[MAX_DETAILS];
 
-    for (int i = 0; i < count; i++)
+    printf("Enter machine ID to update: ");
+    scanf(" %31[^\n]", id);
+    getchar();
+
+    for (int i = 0; i < record_count; ++i)
     {
-        if (strcmp(records[i].machineID, id) == 0)
+        if (strcmp(machineID[i], id) == 0)
         {
-            printf("Current details:\n");
-            printf("Machine Name: %s\n", records[i].machineName);
-            printf("Maintenance Date: %s\n", records[i].maintenanceDate);
-            printf("Maintenance Details: %s\n", records[i].maintenanceDetails);
-
-            read_line_prompt("Enter new machine name (leave blank to keep current): ", records[i].machineName, sizeof(records[i].machineName));
-            read_line_prompt("Enter new maintenance date (YYYY-MM-DD, leave blank to keep current): ", records[i].maintenanceDate, sizeof(records[i].maintenanceDate));
-            read_line_prompt("Enter new maintenance details (leave blank to keep current): ", records[i].maintenanceDetails, sizeof(records[i].maintenanceDetails));
-
-            FILE *file = fopen(CSV_FILE, "w");
-            if (!file)
+            printf("Current Name: %s\n", machineName[i]);
+            printf("New name (leave blank to keep): ");
+            buf[0] = '\0';
+            fgets(buf, sizeof(buf), stdin);
+            if (buf[0] != '\n' && buf[0] != '\0')
             {
-                perror("Failed to open file for writing");
-                return -1;
+                buf[strcspn(buf, "\r\n")] = '\0';
+                strncpy(machineName[i], buf, MAX_NAME - 1);
+                machineName[i][MAX_NAME - 1] = '\0';
             }
-            
-            fprintf(file, "MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n");
-            for (int j = 0; j < count; j++)
-            {
-                fprintf(file, "%s,%s,%s,%s\n",
-                        records[j].machineName,
-                        records[j].machineID,
-                        records[j].maintenanceDate,
-                        records[j].maintenanceDetails);
-            }
-            fclose(file);
 
-            printf("Record updated successfully.\n");
-            return 0;
+            printf("Current Date: %s\n", maintenanceDate[i]);
+            printf("New date YYYY-MM-DD (leave blank to keep): ");
+            buf[0] = '\0';
+            fgets(buf, sizeof(buf), stdin);
+            if (buf[0] != '\n' && buf[0] != '\0')
+            {
+                buf[strcspn(buf, "\r\n")] = '\0';
+                strncpy(maintenanceDate[i], buf, MAX_DATE - 1);
+                maintenanceDate[i][MAX_DATE - 1] = '\0';
+            }
+
+            printf("Current Details: %s\n", maintenanceDetails[i]);
+            printf("New details (leave blank to keep): ");
+            buf[0] = '\0';
+            fgets(buf, sizeof(buf), stdin);
+            if (buf[0] != '\n' && buf[0] != '\0')
+            {
+                buf[strcspn(buf, "\r\n")] = '\0';
+                strncpy(maintenanceDetails[i], buf, MAX_DETAILS - 1);
+                maintenanceDetails[i][MAX_DETAILS - 1] = '\0';
+            }
+
+            printf("Record updated.\n");
+            return;
         }
     }
-
-    printf("No record found with Machine ID '%s'.\n", id);
-    return -1;
+    printf("No record with Machine ID '%s'.\n", id);
 }
 
-int delete_record(MaintenanceRecord **records, int *count)
+void delete_record(void)
 {
     char id[MAX_ID];
-    read_line_prompt("Enter machine ID of the record to delete: ", id, sizeof(id));
-    if (strlen(id) == 0)
-    {
-        printf("Machine ID cannot be empty.\n");
-        return -1;
-    }
+    printf("Enter machine ID to delete: ");
+    scanf(" %31[^\n]", id);
+    getchar();
 
-    for (int i = 0; i < *count; i++)
+    for (int i = 0; i < record_count; ++i)
     {
-        if (strcmp((*records)[i].machineID, id) == 0)
+        if (strcmp(machineID[i], id) == 0)
         {
-            for (int j = i; j < *count - 1; j++)
+            for (int j = i; j < record_count - 1; ++j)
             {
-                (*records)[j] = (*records)[j + 1];
-            }
-            (*count)--;
 
-            FILE *file = fopen(CSV_FILE, "w");
-            if (!file)
-            {
-                perror("Failed to open file for writing");
-                return -1;
+                strncpy(machineName[j], machineName[j + 1], MAX_NAME);
+                strncpy(machineID[j], machineID[j + 1], MAX_ID);
+                strncpy(maintenanceDate[j], maintenanceDate[j + 1], MAX_DATE);
+                strncpy(maintenanceDetails[j], maintenanceDetails[j + 1], MAX_DETAILS);
             }
-
-            fprintf(file, "MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n");
-            for (int j = 0; j < *count; j++)
-            {
-                fprintf(file, "%s,%s,%s,%s\n",
-                        (*records)[j].machineName,
-                        (*records)[j].machineID,
-                        (*records)[j].maintenanceDate,
-                        (*records)[j].maintenanceDetails);
-            }
-            fclose(file);
-
-            MaintenanceRecord *new_records = realloc(*records, (*count) * sizeof(MaintenanceRecord));
-            if (!new_records && *count > 0)
-            {
-                perror("Failed to reallocate memory after deletion");
-                return -1;
-            }
-            *records = new_records;
-
-            printf("Record deleted successfully.\n");
-            return 0;
+            record_count--;
+            printf("Record deleted.\n");
+            return;
         }
     }
-
-    printf("No record found with Machine ID '%s'.\n", id);
-    return -1;
+    printf("No record with Machine ID '%s'.\n", id);
 }
-
