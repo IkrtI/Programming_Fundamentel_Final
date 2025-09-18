@@ -34,6 +34,25 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Ensure GCC is available (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          gcc --version
+
+      - name: Install GCC (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install gcc
+          GCC_PREFIX="$(brew --prefix gcc)"
+          GCC_VERSION="$(brew list --versions gcc | awk '{print $2}')"
+          GCC_MAJOR="${GCC_VERSION%%.*}"
+          mkdir -p "$HOME/.local/bin"
+          ln -sf "$GCC_PREFIX/bin/gcc-${GCC_MAJOR}" "$HOME/.local/bin/gcc"
+          ln -sf "$GCC_PREFIX/bin/g++-${GCC_MAJOR}" "$HOME/.local/bin/g++"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          gcc --version
+
       - name: Set up MSYS2 (Windows)
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
@@ -42,6 +61,11 @@ jobs:
           msystem: MINGW64
           install: >-
             mingw-w64-x86_64-gcc
+
+      - name: Verify GCC (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: gcc --version
 
       - name: Build application
         if: runner.os != 'Windows'
