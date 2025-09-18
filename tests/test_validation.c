@@ -1,5 +1,8 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "maintenance.h"
 
@@ -29,6 +32,66 @@ static int tests_failed = 0;
                     (expected), (actual), __LINE__);                                         \
         }                                                                                    \
     } while (0)
+
+static int redirect_stdin_from_string(const char *text, int *saved_fd, FILE **temp_file)
+{
+    if (!text || !saved_fd || !temp_file)
+    {
+        return -1;
+    }
+
+    *saved_fd = dup(fileno(stdin));
+    if (*saved_fd < 0)
+    {
+        return -1;
+    }
+
+    *temp_file = tmpfile();
+    if (!*temp_file)
+    {
+        close(*saved_fd);
+        *saved_fd = -1;
+        return -1;
+    }
+
+    if (fputs(text, *temp_file) == EOF)
+    {
+        fclose(*temp_file);
+        *temp_file = NULL;
+        close(*saved_fd);
+        *saved_fd = -1;
+        return -1;
+    }
+
+    rewind(*temp_file);
+
+    if (dup2(fileno(*temp_file), fileno(stdin)) < 0)
+    {
+        fclose(*temp_file);
+        *temp_file = NULL;
+        close(*saved_fd);
+        *saved_fd = -1;
+        return -1;
+    }
+
+    return 0;
+}
+
+static void restore_stdin(int saved_fd, FILE *temp_file)
+{
+    if (saved_fd >= 0)
+    {
+        dup2(saved_fd, fileno(stdin));
+        close(saved_fd);
+    }
+
+    if (temp_file)
+    {
+        fclose(temp_file);
+    }
+
+    clearerr(stdin);
+}
 
 static void test_trim_whitespace(void)
 {
@@ -107,6 +170,32 @@ static void test_is_valid_details(void)
     EXPECT_TRUE(!is_valid_details(invalid));
 }
 
+static void test_contains_cancel_signal(void)
+{
+    char with_cancel[] = {'A', 0x18, 'B', '\0'};
+    char no_cancel[] = "Normal text";
+
+    EXPECT_TRUE(contains_cancel_signal(with_cancel));
+    EXPECT_TRUE(!contains_cancel_signal(no_cancel));
+    EXPECT_TRUE(!contains_cancel_signal(NULL));
+}
+
+static void test_is_record_storage_full(void)
+{
+    int original = record_count;
+
+    record_count = 0;
+    EXPECT_TRUE(!is_record_storage_full());
+
+    record_count = MAX_RECORDS;
+    EXPECT_TRUE(is_record_storage_full());
+
+    record_count = -1;
+    EXPECT_TRUE(is_record_storage_full());
+
+    record_count = original;
+}
+
 static void test_csv_path_management(void)
 {
     char original[CSV_PATH_MAX];
@@ -131,6 +220,167 @@ static void test_csv_path_management(void)
     EXPECT_STREQ(original, maintenance_get_csv_path());
 }
 
+static void test_reload_records_with_warning(void)
+{
+    char original[CSV_PATH_MAX];
+    snprintf(original, sizeof(original), "%s", maintenance_get_csv_path());
+
+    EXPECT_TRUE(maintenance_set_csv_path("tests/nonexistent.csv") == 0);
+
+    FILE *capture = tmpfile();
+    EXPECT_TRUE(capture != NULL);
+
+    int saved_stdout_fd = dup(fileno(stdout));
+    EXPECT_TRUE(saved_stdout_fd >= 0);
+
+    int capture_fd = fileno(capture);
+    EXPECT_TRUE(capture_fd >= 0);
+
+    fflush(stdout);
+    EXPECT_TRUE(dup2(capture_fd, fileno(stdout)) >= 0);
+
+    int rc = reload_records_with_warning();
+
+    fflush(stdout);
+    EXPECT_TRUE(dup2(saved_stdout_fd, fileno(stdout)) >= 0);
+    close(saved_stdout_fd);
+
+    rewind(capture);
+    char buffer[256];
+    size_t read = fread(buffer, 1, sizeof(buffer) - 1, capture);
+    buffer[read] = '\0';
+    fclose(capture);
+
+    EXPECT_TRUE(rc != 0);
+    EXPECT_TRUE(strstr(buffer, "Warning: Failed to reload records") != NULL);
+
+    EXPECT_TRUE(maintenance_set_csv_path(original) == 0);
+    EXPECT_STREQ(original, maintenance_get_csv_path());
+}
+
+static void test_ensure_csv_exists_creates_blank_when_declined(void)
+{
+    char original[CSV_PATH_MAX];
+    snprintf(original, sizeof(original), "%s", maintenance_get_csv_path());
+
+    const char *path = "tests/tmp-blank.csv";
+    unlink(path);
+    EXPECT_TRUE(maintenance_set_csv_path(path) == 0);
+
+    int saved_fd = -1;
+    FILE *temp = NULL;
+    EXPECT_TRUE(redirect_stdin_from_string("n\n", &saved_fd, &temp) == 0);
+
+    EXPECT_TRUE(ensure_csv_exists() == 0);
+
+    restore_stdin(saved_fd, temp);
+
+    FILE *created = fopen(path, "r");
+    EXPECT_TRUE(created != NULL);
+    if (created)
+    {
+        char buffer[256];
+        size_t read = fread(buffer, 1, sizeof(buffer) - 1, created);
+        buffer[read] = '\0';
+        fclose(created);
+
+        EXPECT_STREQ("MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n", buffer);
+    }
+
+    unlink(path);
+    EXPECT_TRUE(maintenance_set_csv_path(original) == 0);
+}
+
+static void test_ensure_csv_exists_copies_sample_when_requested(void)
+{
+    char original[CSV_PATH_MAX];
+    snprintf(original, sizeof(original), "%s", maintenance_get_csv_path());
+
+    const char *path = "tests/tmp-copy.csv";
+    unlink(path);
+    EXPECT_TRUE(maintenance_set_csv_path(path) == 0);
+
+    int saved_fd = -1;
+    FILE *temp = NULL;
+    EXPECT_TRUE(redirect_stdin_from_string("y\n", &saved_fd, &temp) == 0);
+
+    EXPECT_TRUE(ensure_csv_exists() == 0);
+
+    restore_stdin(saved_fd, temp);
+
+    FILE *created = fopen(path, "r");
+    EXPECT_TRUE(created != NULL);
+
+    FILE *example = fopen("maintenance-example.csv", "r");
+    EXPECT_TRUE(example != NULL);
+
+    if (created && example)
+    {
+        char created_buffer[8192];
+        char example_buffer[8192];
+
+        size_t created_read = fread(created_buffer, 1, sizeof(created_buffer), created);
+        size_t example_read = fread(example_buffer, 1, sizeof(example_buffer), example);
+
+        fclose(created);
+        fclose(example);
+
+        EXPECT_TRUE(created_read == example_read);
+        if (created_read == example_read)
+        {
+            EXPECT_TRUE(memcmp(created_buffer, example_buffer, created_read) == 0);
+        }
+    }
+    else
+    {
+        if (created)
+        {
+            fclose(created);
+        }
+        if (example)
+        {
+            fclose(example);
+        }
+    }
+
+    unlink(path);
+    EXPECT_TRUE(maintenance_set_csv_path(original) == 0);
+}
+
+static void test_ensure_csv_exists_preserves_existing_file(void)
+{
+    char original[CSV_PATH_MAX];
+    snprintf(original, sizeof(original), "%s", maintenance_get_csv_path());
+
+    const char *path = "tests/tmp-existing.csv";
+    unlink(path);
+
+    FILE *existing = fopen(path, "w");
+    EXPECT_TRUE(existing != NULL);
+    if (existing)
+    {
+        fputs("existing data\n", existing);
+        fclose(existing);
+    }
+
+    EXPECT_TRUE(maintenance_set_csv_path(path) == 0);
+    EXPECT_TRUE(ensure_csv_exists() == 0);
+
+    FILE *check = fopen(path, "r");
+    EXPECT_TRUE(check != NULL);
+    if (check)
+    {
+        char buffer[64];
+        size_t read = fread(buffer, 1, sizeof(buffer) - 1, check);
+        buffer[read] = '\0';
+        fclose(check);
+        EXPECT_STREQ("existing data\n", buffer);
+    }
+
+    unlink(path);
+    EXPECT_TRUE(maintenance_set_csv_path(original) == 0);
+}
+
 int main(void)
 {
     test_trim_whitespace();
@@ -141,7 +391,13 @@ int main(void)
     test_is_valid_machine_id();
     test_is_valid_date();
     test_is_valid_details();
+    test_contains_cancel_signal();
+    test_is_record_storage_full();
     test_csv_path_management();
+    test_reload_records_with_warning();
+    test_ensure_csv_exists_creates_blank_when_declined();
+    test_ensure_csv_exists_copies_sample_when_requested();
+    test_ensure_csv_exists_preserves_existing_file();
 
     if (tests_failed != 0)
     {
