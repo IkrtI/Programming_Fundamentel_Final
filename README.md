@@ -9,6 +9,13 @@
 gcc -std=c11 -Wall -Wextra -O2 -o maint main.c
 ```
 
+### Test
+
+```bash
+gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_validation tests/test_validation.c main.c
+./tests/test_validation
+```
+
 ### Run
 
 ```bash
