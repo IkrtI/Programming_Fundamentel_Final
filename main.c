@@ -653,7 +653,7 @@ void prompt_optional_update(const char *prompt, char *dest, int dest_size,
         return;
     }
   
-    char buffer[MAX_DETAILS];
+    char buffer[dest_size];
 
     while (1)
     {
