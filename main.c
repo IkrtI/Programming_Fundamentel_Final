@@ -6,6 +6,8 @@
 #include "maintenance.h"
 
 static char csv_file_path[CSV_PATH_MAX] = CSV_FILE_DEFAULT;
+static const char *SAMPLE_CSV_FILE = "maintenance-example.csv";
+static const char CSV_HEADER[] = "MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n";
 
 char machineName[MAX_RECORDS][MAX_NAME];
 char machineID[MAX_RECORDS][MAX_ID];
@@ -19,6 +21,9 @@ static void print_cancel_message(void)
 }
 
 static void flush_line(void);
+static int prompt_copy_from_sample(void);
+static int write_blank_csv(const char *path);
+static int copy_example_csv(const char *path);
 
 static int handle_prompt_result(int status, const char *error_message)
 {
@@ -172,19 +177,160 @@ int ensure_csv_exists(void)
         return 0;
     }
 
-    f = fopen(path, "w");
+    printf("No maintenance data file found at '%s'.\n", path);
+
+    int choice = prompt_copy_from_sample();
+    if (choice < 0)
+    {
+        handle_prompt_result(choice, "Error reading setup choice.");
+        return -1;
+    }
+
+    if (choice == 1)
+    {
+        if (copy_example_csv(path) == 0)
+        {
+            printf("Created '%s' using sample data from '%s'.\n", path, SAMPLE_CSV_FILE);
+            return 0;
+        }
+
+        printf("Failed to copy sample data. Creating an empty maintenance file instead.\n");
+    }
+
+    if (write_blank_csv(path) != 0)
+    {
+        return -1;
+    }
+
+    printf("Created empty maintenance file at '%s'.\n", path);
+    return 0;
+}
+
+static int prompt_copy_from_sample(void)
+{
+    char prompt[128];
+    snprintf(prompt, sizeof(prompt), "Copy sample data from %s? (y/n): ", SAMPLE_CSV_FILE);
+
+    while (1)
+    {
+        char response[8];
+        int status = safe_input(response, sizeof(response), prompt);
+
+        if (status == INPUT_CANCELLED)
+        {
+            return INPUT_CANCELLED;
+        }
+
+        if (status == INPUT_TOO_LONG)
+        {
+            continue;
+        }
+
+        if (status == INPUT_ERROR)
+        {
+            return INPUT_ERROR;
+        }
+
+        if (status != INPUT_OK)
+        {
+            continue;
+        }
+
+        if (response[0] == '\0')
+        {
+            printf("Please enter 'y' or 'n'.\n");
+            continue;
+        }
+
+        char c = (char)tolower((unsigned char)response[0]);
+        if (c == 'y')
+        {
+            return 1;
+        }
+        if (c == 'n')
+        {
+            return 0;
+        }
+
+        printf("Please enter 'y' or 'n'.\n");
+    }
+}
+
+static int write_blank_csv(const char *path)
+{
+    FILE *f = fopen(path, "w");
     if (!f)
     {
         perror("Create CSV");
         return -1;
     }
-    fprintf(f, "MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n");
+
+    if (fputs(CSV_HEADER, f) == EOF)
+    {
+        perror("Write CSV header");
+        fclose(f);
+        return -1;
+    }
+
     if (fclose(f) != 0)
     {
         perror("Close CSV");
         return -1;
     }
+
     return 0;
+}
+
+static int copy_example_csv(const char *path)
+{
+    FILE *src = fopen(SAMPLE_CSV_FILE, "r");
+    if (!src)
+    {
+        perror("Open example CSV");
+        return -1;
+    }
+
+    FILE *dst = fopen(path, "w");
+    if (!dst)
+    {
+        perror("Create CSV from example");
+        fclose(src);
+        return -1;
+    }
+
+    char buffer[1024];
+    size_t bytes_read;
+    int error = 0;
+
+    while ((bytes_read = fread(buffer, 1, sizeof(buffer), src)) > 0)
+    {
+        if (fwrite(buffer, 1, bytes_read, dst) != bytes_read)
+        {
+            perror("Write CSV");
+            error = 1;
+            break;
+        }
+    }
+
+    if (!error && ferror(src))
+    {
+        perror("Read example CSV");
+        error = 1;
+    }
+
+    if (fclose(dst) != 0)
+    {
+        perror("Close CSV after copy");
+        error = 1;
+    }
+
+    if (fclose(src) != 0)
+    {
+        perror("Close example CSV");
+        error = 1;
+    }
+
+    return error ? -1 : 0;
 }
 
 int load_records(void)
@@ -216,7 +362,7 @@ int load_records(void)
         if (is_record_storage_full())
         {
             overflow_detected = 1;
-            break;
+            continue;
         }
 
         snprintf(machineName[record_count], MAX_NAME, "%s", n);
@@ -251,7 +397,7 @@ int save_all_records(void)
         return -1;
     }
 
-    fprintf(file, "MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n");
+    fputs(CSV_HEADER, file);
     for (int i = 0; i < record_count; ++i)
     {
         fprintf(file, "%s,%s,%s,%s\n",
