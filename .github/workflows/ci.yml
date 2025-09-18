@@ -17,6 +17,8 @@ defaults:
 jobs:
   build-and-test:
     runs-on: ${{ matrix.os }}
+    env:
+      UNIT_TEST_LOG: ''
     strategy:
       fail-fast: false
       matrix:
@@ -79,15 +81,29 @@ jobs:
       - name: Run unit tests
         if: runner.os != 'Windows'
         run: |
+          set -o pipefail
+          LOG_FILE="test-results-${{ matrix.artifact_name }}.txt"
           gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_validation tests/test_validation.c main.c
-          ./tests/test_validation
+          ./tests/test_validation | tee "$LOG_FILE"
+          echo "UNIT_TEST_LOG=$LOG_FILE" >> "$GITHUB_ENV"
 
       - name: Run unit tests (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
+          set -o pipefail
+          LOG_FILE="test-results-${{ matrix.artifact_name }}.txt"
           gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_validation.exe tests/test_validation.c main.c
-          ./tests/test_validation.exe
+          ./tests/test_validation.exe | tee "$LOG_FILE"
+          GITHUB_ENV_POSIX="$(cygpath "$GITHUB_ENV")"
+          echo "UNIT_TEST_LOG=$LOG_FILE" >> "$GITHUB_ENV_POSIX"
+
+      - name: Upload unit test results
+        if: env.UNIT_TEST_LOG != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-unit-tests
+          path: ${{ env.UNIT_TEST_LOG }}
 
       - name: Package artifact
         if: runner.os != 'Windows'
@@ -128,7 +144,9 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/**/*.zip
+          files: |
+            artifacts/**/*.zip
+            artifacts/**/*.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

@@ -13,7 +13,7 @@ Bug fixes and security updates are actively applied to the `main` branch. Older 
 Please report suspected security vulnerabilities privately so we can address them quickly:
 
 1. Use GitHub's **Security → Report a vulnerability** workflow to open a private security advisory for this repository.
-2. If the advisory workflow is unavailable, email the maintainers at `security@project.local` with as much detail as possible, including:
+2. If the advisory workflow is unavailable, email the maintainers at `security@ikrt.dev` with as much detail as possible, including:
    - A description of the issue and potential impact
    - Steps to reproduce or proof-of-concept code
    - Any suggested mitigations
