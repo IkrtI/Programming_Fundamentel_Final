@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdlib.h>
 
 #define CSV_FILE "maintenance.csv"
 
@@ -26,6 +27,20 @@ void search_records(void);
 void update_record(void);
 void delete_record(void);
 int safe_input(char *buffer, int size, const char *prompt);
+int prompt_with_validation(char *buffer, int size, const char *prompt,
+                           int (*validator)(const char *), const char *error_message);
+int read_menu_choice(void);
+void trim_whitespace(char *str);
+void flush_line(void);
+void sanitize_input(char *buffer);
+int is_non_empty(const char *str);
+int is_valid_machine_name(const char *str);
+int is_valid_machine_id(const char *str);
+int is_valid_date(const char *str);
+int is_valid_details(const char *str);
+int contains_disallowed_csv_chars(const char *str);
+void prompt_optional_update(const char *prompt, char *dest, int dest_size,
+                            int (*validator)(const char *), const char *error_message);
 
 int main(void)
 {
@@ -44,20 +59,7 @@ int main(void)
     do
     {
         display_menu();
-        printf("Enter your choice: ");
-        if (scanf("%d", &choice) != 1)
-        {
-            int c;
-            while ((c = getchar()) != '\n' && c != EOF)
-            {
-            }
-            choice = 0;
-        }
-
-        int ch;
-        while ((ch = getchar()) != '\n' && ch != EOF)
-        {
-        }
+        choice = read_menu_choice();
 
         switch (choice)
         {
@@ -161,17 +163,10 @@ int load_records(void)
         if (matched != 4)
             break;
 
-        strncpy(machineName[record_count], n, MAX_NAME - 1);
-        machineName[record_count][MAX_NAME - 1] = '\0';
-
-        strncpy(machineID[record_count], id, MAX_ID - 1);
-        machineID[record_count][MAX_ID - 1] = '\0';
-
-        strncpy(maintenanceDate[record_count], d, MAX_DATE - 1);
-        maintenanceDate[record_count][MAX_DATE - 1] = '\0';
-
-        strncpy(maintenanceDetails[record_count], det, MAX_DETAILS - 1);
-        maintenanceDetails[record_count][MAX_DETAILS - 1] = '\0';
+        snprintf(machineName[record_count], MAX_NAME, "%s", n);
+        snprintf(machineID[record_count], MAX_ID, "%s", id);
+        snprintf(maintenanceDate[record_count], MAX_DATE, "%s", d);
+        snprintf(maintenanceDetails[record_count], MAX_DETAILS, "%s", det);
 
         record_count++;
     }
@@ -235,13 +230,17 @@ void add_record(void)
 
     char n[MAX_NAME], id[MAX_ID], d[MAX_DATE], det[MAX_DETAILS];
 
-    if (safe_input(n, sizeof(n), "Enter machine name: ") != 0)
+    if (prompt_with_validation(n, MAX_NAME, "Enter machine name: ",
+                               is_valid_machine_name,
+                               "Machine name must be printable text without commas or quotes.") != 0)
     {
         printf("Error reading machine name.\n");
         return;
     }
 
-    if (safe_input(id, sizeof(id), "Enter machine ID: ") != 0)
+    if (prompt_with_validation(id, MAX_ID, "Enter machine ID: ",
+                               is_valid_machine_id,
+                               "Machine ID must use letters, numbers, dashes, underscores or dots only.") != 0)
     {
         printf("Error reading machine ID.\n");
         return;
@@ -256,29 +255,26 @@ void add_record(void)
         }
     }
 
-    if (safe_input(d, sizeof(d), "Enter maintenance date (YYYY-MM-DD): ") != 0)
+    if (prompt_with_validation(d, MAX_DATE, "Enter maintenance date (YYYY-MM-DD): ",
+                               is_valid_date,
+                               "Date must follow YYYY-MM-DD with a real calendar day.") != 0)
     {
         printf("Error reading maintenance date.\n");
         return;
     }
 
-    if (safe_input(det, sizeof(det), "Enter maintenance details: ") != 0)
+    if (prompt_with_validation(det, MAX_DETAILS, "Enter maintenance details: ",
+                               is_valid_details,
+                               "Details must not be empty, contain commas or quotes.") != 0)
     {
         printf("Error reading maintenance details.\n");
         return;
     }
 
-    strncpy(machineName[record_count], n, MAX_NAME - 1);
-    machineName[record_count][MAX_NAME - 1] = '\0';
-
-    strncpy(machineID[record_count], id, MAX_ID - 1);
-    machineID[record_count][MAX_ID - 1] = '\0';
-
-    strncpy(maintenanceDate[record_count], d, MAX_DATE - 1);
-    maintenanceDate[record_count][MAX_DATE - 1] = '\0';
-
-    strncpy(maintenanceDetails[record_count], det, MAX_DETAILS - 1);
-    maintenanceDetails[record_count][MAX_DETAILS - 1] = '\0';
+    snprintf(machineName[record_count], MAX_NAME, "%s", n);
+    snprintf(machineID[record_count], MAX_ID, "%s", id);
+    snprintf(maintenanceDate[record_count], MAX_DATE, "%s", d);
+    snprintf(maintenanceDetails[record_count], MAX_DETAILS, "%s", det);
 
     record_count++;
     printf("Record added.\n");
@@ -286,10 +282,12 @@ void add_record(void)
 
 void search_records(void)
 {
-    char q[64];
+    char q[MAX_NAME];
     int found = 0;
 
-    if (safe_input(q, sizeof(q), "Enter machine name or ID to search: ") != 0)
+    if (prompt_with_validation(q, MAX_NAME, "Enter machine name or ID to search: ",
+                               is_non_empty,
+                               "Search text cannot be empty.") != 0)
     {
         printf("Error reading search query.\n");
         return;
@@ -317,9 +315,10 @@ void search_records(void)
 void update_record(void)
 {
     char id[MAX_ID];
-    char buf[MAX_DETAILS];
 
-    if (safe_input(id, sizeof(id), "Enter machine ID to update: ") != 0)
+    if (prompt_with_validation(id, MAX_ID, "Enter machine ID to update: ",
+                               is_valid_machine_id,
+                               "Machine ID must use letters, numbers, dashes, underscores or dots only.") != 0)
     {
         printf("Error reading machine ID.\n");
         return;
@@ -330,43 +329,22 @@ void update_record(void)
         if (strcmp(machineID[i], id) == 0)
         {
             printf("Current Name: %s\n", machineName[i]);
-            printf("New name (leave blank to keep): ");
-            buf[0] = '\0';
-            if (fgets(buf, sizeof(buf), stdin) != NULL)
-            {
-                if (buf[0] != '\n' && buf[0] != '\0')
-                {
-                    buf[strcspn(buf, "\r\n")] = '\0';
-                    strncpy(machineName[i], buf, MAX_NAME - 1);
-                    machineName[i][MAX_NAME - 1] = '\0';
-                }
-            }
+            prompt_optional_update("New name (leave blank to keep): ",
+                                   machineName[i], MAX_NAME,
+                                   is_valid_machine_name,
+                                   "Machine name must be printable text without commas or quotes.");
 
             printf("Current Date: %s\n", maintenanceDate[i]);
-            printf("New date YYYY-MM-DD (leave blank to keep): ");
-            buf[0] = '\0';
-            if (fgets(buf, sizeof(buf), stdin) != NULL)
-            {
-                if (buf[0] != '\n' && buf[0] != '\0')
-                {
-                    buf[strcspn(buf, "\r\n")] = '\0';
-                    strncpy(maintenanceDate[i], buf, MAX_DATE - 1);
-                    maintenanceDate[i][MAX_DATE - 1] = '\0';
-                }
-            }
+            prompt_optional_update("New date YYYY-MM-DD (leave blank to keep): ",
+                                   maintenanceDate[i], MAX_DATE,
+                                   is_valid_date,
+                                   "Date must follow YYYY-MM-DD with a real calendar day.");
 
             printf("Current Details: %s\n", maintenanceDetails[i]);
-            printf("New details (leave blank to keep): ");
-            buf[0] = '\0';
-            if (fgets(buf, sizeof(buf), stdin) != NULL)
-            {
-                if (buf[0] != '\n' && buf[0] != '\0')
-                {
-                    buf[strcspn(buf, "\r\n")] = '\0';
-                    strncpy(maintenanceDetails[i], buf, MAX_DETAILS - 1);
-                    maintenanceDetails[i][MAX_DETAILS - 1] = '\0';
-                }
-            }
+            prompt_optional_update("New details (leave blank to keep): ",
+                                   maintenanceDetails[i], MAX_DETAILS,
+                                   is_valid_details,
+                                   "Details must not be empty, contain commas or quotes.");
 
             printf("Record updated.\n");
             return;
@@ -379,7 +357,9 @@ void delete_record(void)
 {
     char id[MAX_ID];
     
-    if (safe_input(id, sizeof(id), "Enter machine ID to delete: ") != 0)
+    if (prompt_with_validation(id, MAX_ID, "Enter machine ID to delete: ",
+                               is_valid_machine_id,
+                               "Machine ID must use letters, numbers, dashes, underscores or dots only.") != 0)
     {
         printf("Error reading machine ID.\n");
         return;
@@ -392,10 +372,10 @@ void delete_record(void)
             for (int j = i; j < record_count - 1; ++j)
             {
 
-                strncpy(machineName[j], machineName[j + 1], MAX_NAME);
-                strncpy(machineID[j], machineID[j + 1], MAX_ID);
-                strncpy(maintenanceDate[j], maintenanceDate[j + 1], MAX_DATE);
-                strncpy(maintenanceDetails[j], maintenanceDetails[j + 1], MAX_DETAILS);
+                snprintf(machineName[j], MAX_NAME, "%s", machineName[j + 1]);
+                snprintf(machineID[j], MAX_ID, "%s", machineID[j + 1]);
+                snprintf(maintenanceDate[j], MAX_DATE, "%s", maintenanceDate[j + 1]);
+                snprintf(maintenanceDetails[j], MAX_DETAILS, "%s", maintenanceDetails[j + 1]);
             }
             record_count--;
             printf("Record deleted.\n");
@@ -407,13 +387,294 @@ void delete_record(void)
 
 int safe_input(char *buffer, int size, const char *prompt)
 {
+    if (size <= 0)
+    {
+        return -1;
+    }
+
     printf("%s", prompt);
     if (fgets(buffer, size, stdin) == NULL)
     {
         return -1;
     }
-    
-    // Remove trailing newline
-    buffer[strcspn(buffer, "\r\n")] = '\0';
+
+    sanitize_input(buffer);
     return 0;
+}
+
+int prompt_with_validation(char *buffer, int size, const char *prompt,
+                           int (*validator)(const char *), const char *error_message)
+{
+    if (size <= 0)
+    {
+        return -1;
+    }
+
+    while (1)
+    {
+        if (safe_input(buffer, size, prompt) != 0)
+        {
+            return -1;
+        }
+
+        if (!validator || validator(buffer))
+        {
+            return 0;
+        }
+
+        if (error_message)
+        {
+            printf("%s\n", error_message);
+        }
+    }
+}
+
+int read_menu_choice(void)
+{
+    char buffer[16];
+
+    while (1)
+    {
+        if (safe_input(buffer, sizeof(buffer), "Enter your choice: ") != 0)
+        {
+            printf("Input error detected. Exiting menu.\n");
+            return 6;
+        }
+
+        if (buffer[0] == '\0')
+        {
+            printf("Invalid choice. Please enter a number between 1 and 6.\n");
+            continue;
+        }
+
+        char *endptr = NULL;
+        long value = strtol(buffer, &endptr, 10);
+        if (endptr != NULL && *endptr == '\0' && value >= 1 && value <= 6)
+        {
+            return (int)value;
+        }
+
+        printf("Invalid choice. Please enter a number between 1 and 6.\n");
+    }
+}
+
+void trim_whitespace(char *str)
+{
+    if (!str)
+    {
+        return;
+    }
+
+    char *start = str;
+    while (*start && isspace((unsigned char)*start))
+    {
+        start++;
+    }
+
+    if (start != str)
+    {
+        memmove(str, start, strlen(start) + 1);
+    }
+
+    size_t len = strlen(str);
+    while (len > 0 && isspace((unsigned char)str[len - 1]))
+    {
+        str[len - 1] = '\0';
+        len--;
+    }
+}
+
+void flush_line(void)
+{
+    int ch;
+    while ((ch = getchar()) != '\n' && ch != EOF)
+    {
+    }
+}
+
+void sanitize_input(char *buffer)
+{
+    if (!buffer)
+    {
+        return;
+    }
+
+    size_t len = strcspn(buffer, "\r\n");
+    if (buffer[len] != '\0')
+    {
+        buffer[len] = '\0';
+    }
+    else
+    {
+        flush_line();
+    }
+
+    trim_whitespace(buffer);
+}
+
+int is_non_empty(const char *str)
+{
+    return (str != NULL && str[0] != '\0');
+}
+
+int contains_disallowed_csv_chars(const char *str)
+{
+    if (!str)
+    {
+        return 0;
+    }
+
+    for (const char *p = str; *p; ++p)
+    {
+        if (*p == ',' || *p == '"')
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int is_valid_machine_name(const char *str)
+{
+    if (!is_non_empty(str) || contains_disallowed_csv_chars(str))
+    {
+        return 0;
+    }
+
+    for (const char *p = str; *p; ++p)
+    {
+        if (!isprint((unsigned char)*p))
+        {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int is_valid_machine_id(const char *str)
+{
+    if (!is_non_empty(str) || contains_disallowed_csv_chars(str))
+    {
+        return 0;
+    }
+
+    for (const char *p = str; *p; ++p)
+    {
+        if (!(isalnum((unsigned char)*p) || *p == '-' || *p == '_' || *p == '.'))
+        {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int is_valid_date(const char *str)
+{
+    if (!str)
+    {
+        return 0;
+    }
+
+    if (strlen(str) != 10)
+    {
+        return 0;
+    }
+
+    for (int i = 0; i < 10; ++i)
+    {
+        if (i == 4 || i == 7)
+        {
+            if (str[i] != '-')
+            {
+                return 0;
+            }
+        }
+        else if (!isdigit((unsigned char)str[i]))
+        {
+            return 0;
+        }
+    }
+
+    char year_buf[5], month_buf[3], day_buf[3];
+    memcpy(year_buf, str, 4); year_buf[4] = '\0';
+    memcpy(month_buf, str + 5, 2); month_buf[2] = '\0';
+    memcpy(day_buf, str + 8, 2); day_buf[2] = '\0';
+    int year = atoi(year_buf);
+    int month = atoi(month_buf);
+    int day = atoi(day_buf);
+
+    if (month < 1 || month > 12)
+    {
+        return 0;
+    }
+
+    int days_in_month[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    int is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    if (is_leap)
+    {
+        days_in_month[1] = 29;
+    }
+
+    if (day < 1 || day > days_in_month[month - 1])
+    {
+        return 0;
+    }
+
+    return 1;
+}
+
+int is_valid_details(const char *str)
+{
+    if (!is_non_empty(str) || contains_disallowed_csv_chars(str))
+    {
+        return 0;
+    }
+
+    for (const char *p = str; *p; ++p)
+    {
+        if (!isprint((unsigned char)*p))
+        {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+void prompt_optional_update(const char *prompt, char *dest, int dest_size,
+                            int (*validator)(const char *), const char *error_message)
+{
+    if (!dest || dest_size <= 0)
+    {
+        return;
+    }
+
+    char buffer[dest_size];
+
+    while (1)
+    {
+        printf("%s", prompt);
+        if (fgets(buffer, sizeof(buffer), stdin) == NULL)
+        {
+            printf("Input error. Field unchanged.\n");
+            return;
+        }
+
+        sanitize_input(buffer);
+
+        if (buffer[0] == '\0')
+        {
+            return;
+        }
+
+        if (!validator || validator(buffer))
+        {
+            snprintf(dest, dest_size, "%s", buffer);
+            return;
+        }
+
+        if (error_message)
+        {
+            printf("%s\n", error_message);
+        }
+    }
 }
