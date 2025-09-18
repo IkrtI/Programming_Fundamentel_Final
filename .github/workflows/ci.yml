@@ -1,0 +1,154 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-and-test:
+    runs-on: ${{ matrix.os }}
+    env:
+      UNIT_TEST_LOG: ''
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: maint-linux
+            packaged_name: maint-linux
+          - os: macos-latest
+            artifact_name: maint-macos
+            packaged_name: maint-macos
+          - os: windows-latest
+            artifact_name: maint-windows
+            packaged_name: maint-windows.exe
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Ensure GCC is available (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          gcc --version
+
+      - name: Install GCC (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install gcc
+          GCC_PREFIX="$(brew --prefix gcc)"
+          GCC_VERSION="$(brew list --versions gcc | awk '{print $2}')"
+          GCC_MAJOR="${GCC_VERSION%%.*}"
+          mkdir -p "$HOME/.local/bin"
+          ln -sf "$GCC_PREFIX/bin/gcc-${GCC_MAJOR}" "$HOME/.local/bin/gcc"
+          ln -sf "$GCC_PREFIX/bin/g++-${GCC_MAJOR}" "$HOME/.local/bin/g++"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          gcc --version
+
+      - name: Set up MSYS2 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          msystem: MINGW64
+          install: >-
+            mingw-w64-x86_64-gcc
+
+      - name: Verify GCC (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: gcc --version
+
+      - name: Build application
+        if: runner.os != 'Windows'
+        run: gcc -std=c11 -Wall -Wextra -O2 -o maint main.c
+
+      - name: Build application (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: gcc -std=c11 -Wall -Wextra -O2 -o maint.exe main.c
+
+      - name: Run unit tests
+        if: runner.os != 'Windows'
+        run: |
+          set -o pipefail
+          LOG_FILE="test-results-${{ matrix.artifact_name }}.txt"
+          gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_validation tests/test_validation.c main.c
+          ./tests/test_validation | tee "$LOG_FILE"
+          echo "UNIT_TEST_LOG=$LOG_FILE" >> "$GITHUB_ENV"
+
+      - name: Run unit tests (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          set -o pipefail
+          LOG_FILE="test-results-${{ matrix.artifact_name }}.txt"
+          gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_validation.exe tests/test_validation.c main.c
+          ./tests/test_validation.exe | tee "$LOG_FILE"
+          GITHUB_ENV_POSIX="$(cygpath "$GITHUB_ENV")"
+          echo "UNIT_TEST_LOG=$LOG_FILE" >> "$GITHUB_ENV_POSIX"
+
+      - name: Upload unit test results
+        if: env.UNIT_TEST_LOG != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-unit-tests
+          path: ${{ env.UNIT_TEST_LOG }}
+
+      - name: Package artifact
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp maint dist/${{ matrix.packaged_name }}
+          (cd dist && zip -r ../${{ matrix.artifact_name }}.zip ${{ matrix.packaged_name }})
+
+      - name: Package artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $destination = Join-Path dist '${{ matrix.packaged_name }}'
+          Copy-Item maint.exe $destination -Force
+          Push-Location dist
+          Compress-Archive -Path '${{ matrix.packaged_name }}' -DestinationPath "../${{ matrix.artifact_name }}.zip" -Force
+          Pop-Location
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.zip
+
+  release:
+    needs: build-and-test
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/**/*.zip
+            artifacts/**/*.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: List packaged assets
+        run: ls -R artifacts
