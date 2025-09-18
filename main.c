@@ -13,6 +13,50 @@ char maintenanceDate[MAX_RECORDS][MAX_DATE];
 char maintenanceDetails[MAX_RECORDS][MAX_DETAILS];
 int record_count = 0;
 
+static void print_cancel_message(void)
+{
+    printf("\nOperation cancelled. Returning to Machine Maintenance Manager.\n");
+}
+
+static void flush_line(void);
+
+static int handle_prompt_result(int status, const char *error_message)
+{
+    if (status == INPUT_CANCELLED)
+    {
+        print_cancel_message();
+        return 1;
+    }
+
+    if (status == INPUT_ERROR)
+    {
+        if (error_message)
+        {
+            printf("%s\n", error_message);
+        }
+        return 1;
+    }
+
+    return 0;
+}
+
+int reload_records_with_warning(void)
+{
+    if (load_records() != 0)
+    {
+        const char *path = maintenance_get_csv_path();
+        if (!path || path[0] == '\0')
+        {
+            path = "(unknown)";
+        }
+
+        printf("Warning: Failed to reload records from '%s'. Data may be stale.\n", path);
+        return -1;
+    }
+
+    return 0;
+}
+
 const char *maintenance_get_csv_path(void)
 {
     return csv_file_path;
@@ -32,7 +76,7 @@ int maintenance_set_csv_path(const char *path)
     }
 
     int written = snprintf(csv_file_path, sizeof(csv_file_path), "%s", path);
-    if (written >= sizeof(csv_file_path))
+    if (written < 0 || (size_t)written >= sizeof(csv_file_path))
     {
         // Truncation occurred
         return -1;
@@ -73,8 +117,7 @@ int main(void)
             add_record();
             if (save_all_records() == 0)
             {
-                // Reload to reflect changes
-                load_records();
+                reload_records_with_warning();
             }
             break;
         case 3:
@@ -84,16 +127,14 @@ int main(void)
             update_record();
             if (save_all_records() == 0)
             {
-                // Reload to reflect changes
-                load_records();  
+                reload_records_with_warning();
             }
             break;
         case 5:
             delete_record();
             if (save_all_records() == 0)
             {
-                // Reload to reflect changes
-                load_records();
+                reload_records_with_warning();
             }
             break;
         case 6:
@@ -164,12 +205,19 @@ int load_records(void)
     } /* ไม่มีข้อมูล */
 
     record_count = 0;
-    while (record_count < MAX_RECORDS)
+    int overflow_detected = 0;
+    while (1)
     {
         char n[MAX_NAME], id[MAX_ID], d[MAX_DATE], det[MAX_DETAILS];
         int matched = fscanf(file, " %63[^,],%31[^,],%15[^,],%255[^\n]\n", n, id, d, det);
         if (matched != 4)
             break;
+
+        if (is_record_storage_full())
+        {
+            overflow_detected = 1;
+            continue;
+        }
 
         snprintf(machineName[record_count], MAX_NAME, "%s", n);
         snprintf(machineID[record_count], MAX_ID, "%s", id);
@@ -177,6 +225,12 @@ int load_records(void)
         snprintf(maintenanceDetails[record_count], MAX_DETAILS, "%s", det);
 
         record_count++;
+    }
+
+    if (overflow_detected)
+    {
+        printf("Warning: Maximum record capacity of %d reached. Extra records were ignored to prevent overflow.\n",
+               MAX_RECORDS);
     }
 
     if (fclose(file) != 0)
@@ -231,7 +285,7 @@ void display_records(void)
 
 void add_record(void)
 {
-    if (record_count >= MAX_RECORDS)
+    if (is_record_storage_full())
     {
         printf("Storage full.\n");
         return;
@@ -239,19 +293,19 @@ void add_record(void)
 
     char n[MAX_NAME], id[MAX_ID], d[MAX_DATE], det[MAX_DETAILS];
 
-    if (prompt_with_validation(n, MAX_NAME, "Enter machine name: ",
-                               is_valid_machine_name,
-                               "Machine name must be printable text without commas or quotes.") != 0)
+    int status = prompt_with_validation(n, MAX_NAME, "Enter machine name: ",
+                                        is_valid_machine_name,
+                                        "Machine name must be printable text without commas or quotes.");
+    if (handle_prompt_result(status, "Error reading machine name."))
     {
-        printf("Error reading machine name.\n");
         return;
     }
 
-    if (prompt_with_validation(id, MAX_ID, "Enter machine ID: ",
-                               is_valid_machine_id,
-                               "Machine ID must use letters, numbers, dashes, underscores or dots only.") != 0)
+    status = prompt_with_validation(id, MAX_ID, "Enter machine ID: ",
+                                    is_valid_machine_id,
+                                    "Machine ID must use letters, numbers, dashes, underscores or dots only.");
+    if (handle_prompt_result(status, "Error reading machine ID."))
     {
-        printf("Error reading machine ID.\n");
         return;
     }
 
@@ -264,19 +318,19 @@ void add_record(void)
         }
     }
 
-    if (prompt_with_validation(d, MAX_DATE, "Enter maintenance date (YYYY-MM-DD): ",
-                               is_valid_date,
-                               "Date must follow YYYY-MM-DD with a real calendar day.") != 0)
+    status = prompt_with_validation(d, MAX_DATE, "Enter maintenance date (YYYY-MM-DD): ",
+                                    is_valid_date,
+                                    "Date must follow YYYY-MM-DD with a real calendar day.");
+    if (handle_prompt_result(status, "Error reading maintenance date."))
     {
-        printf("Error reading maintenance date.\n");
         return;
     }
 
-    if (prompt_with_validation(det, MAX_DETAILS, "Enter maintenance details: ",
-                               is_valid_details,
-                               "Details must not be empty, contain commas or quotes.") != 0)
+    status = prompt_with_validation(det, MAX_DETAILS, "Enter maintenance details: ",
+                                    is_valid_details,
+                                    "Details must not be empty, contain commas or quotes.");
+    if (handle_prompt_result(status, "Error reading maintenance details."))
     {
-        printf("Error reading maintenance details.\n");
         return;
     }
 
@@ -294,11 +348,11 @@ void search_records(void)
     char q[MAX_NAME];
     int found = 0;
 
-    if (prompt_with_validation(q, MAX_NAME, "Enter machine name or ID to search: ",
-                               is_non_empty,
-                               "Search text cannot be empty.") != 0)
+    int status = prompt_with_validation(q, MAX_NAME, "Enter machine name or ID to search: ",
+                                        is_non_empty,
+                                        "Search text cannot be empty.");
+    if (handle_prompt_result(status, "Error reading search query."))
     {
-        printf("Error reading search query.\n");
         return;
     }
 
@@ -325,11 +379,11 @@ void update_record(void)
 {
     char id[MAX_ID];
 
-    if (prompt_with_validation(id, MAX_ID, "Enter machine ID to update: ",
-                               is_valid_machine_id,
-                               "Machine ID must use letters, numbers, dashes, underscores or dots only.") != 0)
+    int status = prompt_with_validation(id, MAX_ID, "Enter machine ID to update: ",
+                                        is_valid_machine_id,
+                                        "Machine ID must use letters, numbers, dashes, underscores or dots only.");
+    if (handle_prompt_result(status, "Error reading machine ID."))
     {
-        printf("Error reading machine ID.\n");
         return;
     }
 
@@ -337,23 +391,47 @@ void update_record(void)
     {
         if (strcmp(machineID[i], id) == 0)
         {
+            char new_name[MAX_NAME];
+            char new_date[MAX_DATE];
+            char new_details[MAX_DETAILS];
+
+            snprintf(new_name, sizeof(new_name), "%s", machineName[i]);
+            snprintf(new_date, sizeof(new_date), "%s", maintenanceDate[i]);
+            snprintf(new_details, sizeof(new_details), "%s", maintenanceDetails[i]);
+
             printf("Current Name: %s\n", machineName[i]);
-            prompt_optional_update("New name (leave blank to keep): ",
-                                   machineName[i], MAX_NAME,
-                                   is_valid_machine_name,
-                                   "Machine name must be printable text without commas or quotes.");
+            status = prompt_optional_update("New name (leave blank to keep): ",
+                                             new_name, MAX_NAME,
+                                             is_valid_machine_name,
+                                             "Machine name must be printable text without commas or quotes.");
+            if (status != INPUT_OK && handle_prompt_result(status, "Error updating machine name."))
+            {
+                return;
+            }
 
             printf("Current Date: %s\n", maintenanceDate[i]);
-            prompt_optional_update("New date YYYY-MM-DD (leave blank to keep): ",
-                                   maintenanceDate[i], MAX_DATE,
-                                   is_valid_date,
-                                   "Date must follow YYYY-MM-DD with a real calendar day.");
+            status = prompt_optional_update("New date YYYY-MM-DD (leave blank to keep): ",
+                                             new_date, MAX_DATE,
+                                             is_valid_date,
+                                             "Date must follow YYYY-MM-DD with a real calendar day.");
+            if (status != INPUT_OK && handle_prompt_result(status, "Error updating maintenance date."))
+            {
+                return;
+            }
 
             printf("Current Details: %s\n", maintenanceDetails[i]);
-            prompt_optional_update("New details (leave blank to keep): ",
-                                   maintenanceDetails[i], MAX_DETAILS,
-                                   is_valid_details,
-                                   "Details must not be empty, contain commas or quotes.");
+            status = prompt_optional_update("New details (leave blank to keep): ",
+                                             new_details, MAX_DETAILS,
+                                             is_valid_details,
+                                             "Details must not be empty, contain commas or quotes.");
+            if (status != INPUT_OK && handle_prompt_result(status, "Error updating maintenance details."))
+            {
+                return;
+            }
+
+            snprintf(machineName[i], MAX_NAME, "%s", new_name);
+            snprintf(maintenanceDate[i], MAX_DATE, "%s", new_date);
+            snprintf(maintenanceDetails[i], MAX_DETAILS, "%s", new_details);
 
             printf("Record updated.\n");
             return;
@@ -366,11 +444,11 @@ void delete_record(void)
 {
     char id[MAX_ID];
     
-    if (prompt_with_validation(id, MAX_ID, "Enter machine ID to delete: ",
-                               is_valid_machine_id,
-                               "Machine ID must use letters, numbers, dashes, underscores or dots only.") != 0)
+    int status = prompt_with_validation(id, MAX_ID, "Enter machine ID to delete: ",
+                                        is_valid_machine_id,
+                                        "Machine ID must use letters, numbers, dashes, underscores or dots only.");
+    if (handle_prompt_result(status, "Error reading machine ID."))
     {
-        printf("Error reading machine ID.\n");
         return;
     }
 
@@ -380,11 +458,10 @@ void delete_record(void)
         {
             for (int j = i; j < record_count - 1; ++j)
             {
-
-                snprintf(machineName[j], MAX_NAME, "%s", machineName[j + 1]);
-                snprintf(machineID[j], MAX_ID, "%s", machineID[j + 1]);
-                snprintf(maintenanceDate[j], MAX_DATE, "%s", maintenanceDate[j + 1]);
-                snprintf(maintenanceDetails[j], MAX_DETAILS, "%s", maintenanceDetails[j + 1]);
+                memmove(machineName[j], machineName[j + 1], sizeof(machineName[j]));
+                memmove(machineID[j], machineID[j + 1], sizeof(machineID[j]));
+                memmove(maintenanceDate[j], maintenanceDate[j + 1], sizeof(maintenanceDate[j]));
+                memmove(maintenanceDetails[j], maintenanceDetails[j + 1], sizeof(maintenanceDetails[j]));
             }
             record_count--;
             printf("Record deleted.\n");
@@ -398,17 +475,38 @@ int safe_input(char *buffer, int size, const char *prompt)
 {
     if (size <= 0)
     {
-        return -1;
+        return INPUT_ERROR;
     }
 
     printf("%s", prompt);
+    fflush(stdout);
     if (fgets(buffer, size, stdin) == NULL)
     {
-        return -1;
+        return INPUT_ERROR;
+    }
+
+    int truncated = (strchr(buffer, '\n') == NULL);
+
+    if (contains_cancel_signal(buffer))
+    {
+        if (truncated)
+        {
+            flush_line();
+        }
+        buffer[0] = '\0';
+        return INPUT_CANCELLED;
     }
 
     sanitize_input(buffer);
-    return 0;
+
+    if (truncated)
+    {
+        printf("Input too long. Maximum length is %d characters.\n", size - 1);
+        buffer[0] = '\0';
+        return INPUT_TOO_LONG;
+    }
+
+    return INPUT_OK;
 }
 
 int prompt_with_validation(char *buffer, int size, const char *prompt,
@@ -416,19 +514,30 @@ int prompt_with_validation(char *buffer, int size, const char *prompt,
 {
     if (size <= 0)
     {
-        return -1;
+        return INPUT_ERROR;
     }
 
     while (1)
     {
-        if (safe_input(buffer, size, prompt) != 0)
+        int status = safe_input(buffer, size, prompt);
+        if (status == INPUT_CANCELLED)
         {
-            return -1;
+            return INPUT_CANCELLED;
+        }
+
+        if (status == INPUT_ERROR)
+        {
+            return INPUT_ERROR;
+        }
+
+        if (status == INPUT_TOO_LONG)
+        {
+            continue;
         }
 
         if (!validator || validator(buffer))
         {
-            return 0;
+            return INPUT_OK;
         }
 
         if (error_message)
@@ -445,10 +554,22 @@ int read_menu_choice(void)
 
     while (1)
     {
-        if (safe_input(buffer, sizeof(buffer), "Enter your choice: ") != 0)
+        int status = safe_input(buffer, sizeof(buffer), "Enter your choice: ");
+        if (status == INPUT_CANCELLED)
+        {
+            print_cancel_message();
+            continue;
+        }
+
+        if (status == INPUT_ERROR)
         {
             printf("Input error detected. Exiting menu.\n");
             return 6;
+        }
+
+        if (status == INPUT_TOO_LONG)
+        {
+            continue;
         }
 
         if (buffer[0] == '\0')
@@ -495,7 +616,7 @@ void trim_whitespace(char *str)
     }
 }
 
-void flush_line(void)
+static void flush_line(void)
 {
     int ch;
     while ((ch = getchar()) != '\n' && ch != EOF)
@@ -542,6 +663,24 @@ int contains_disallowed_csv_chars(const char *str)
             return 1;
         }
     }
+    return 0;
+}
+
+int contains_cancel_signal(const char *str)
+{
+    if (!str)
+    {
+        return 0;
+    }
+
+    for (const unsigned char *p = (const unsigned char *)str; *p != '\0'; ++p)
+    {
+        if (*p == 0x18)
+        {
+            return 1;
+        }
+    }
+
     return 0;
 }
 
@@ -647,36 +786,49 @@ int is_valid_details(const char *str)
     return 1;
 }
 
-void prompt_optional_update(const char *prompt, char *dest, int dest_size,
-                            int (*validator)(const char *), const char *error_message)
+int is_record_storage_full(void)
+{
+    return (record_count < 0) || (record_count >= MAX_RECORDS);
+}
+
+int prompt_optional_update(const char *prompt, char *dest, int dest_size,
+                           int (*validator)(const char *), const char *error_message)
 {
     if (!dest || dest_size <= 0)
     {
-        return;
+        return INPUT_ERROR;
     }
-  
+
     char buffer[dest_size];
 
     while (1)
     {
-        printf("%s", prompt);
-        if (fgets(buffer, sizeof(buffer), stdin) == NULL)
+        int status = safe_input(buffer, sizeof(buffer), prompt);
+        if (status == INPUT_CANCELLED)
         {
-            printf("Input error. Field unchanged.\n");
-            return;
+            return INPUT_CANCELLED;
         }
 
-        sanitize_input(buffer);
+        if (status == INPUT_ERROR)
+        {
+            printf("Input error. Field unchanged.\n");
+            return INPUT_ERROR;
+        }
+
+        if (status == INPUT_TOO_LONG)
+        {
+            continue;
+        }
 
         if (buffer[0] == '\0')
         {
-            return;
+            return INPUT_OK;
         }
 
         if (!validator || validator(buffer))
         {
             snprintf(dest, dest_size, "%s", buffer);
-            return;
+            return INPUT_OK;
         }
 
         if (error_message)
