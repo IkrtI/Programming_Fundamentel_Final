@@ -595,9 +595,13 @@ int is_valid_date(const char *str)
         }
     }
 
-    int year = (str[0] - '0') * 1000 + (str[1] - '0') * 100 + (str[2] - '0') * 10 + (str[3] - '0');
-    int month = (str[5] - '0') * 10 + (str[6] - '0');
-    int day = (str[8] - '0') * 10 + (str[9] - '0');
+    char year_buf[5], month_buf[3], day_buf[3];
+    memcpy(year_buf, str, 4); year_buf[4] = '\0';
+    memcpy(month_buf, str + 5, 2); month_buf[2] = '\0';
+    memcpy(day_buf, str + 8, 2); day_buf[2] = '\0';
+    int year = atoi(year_buf);
+    int month = atoi(month_buf);
+    int day = atoi(day_buf);
 
     if (month < 1 || month > 12)
     {
