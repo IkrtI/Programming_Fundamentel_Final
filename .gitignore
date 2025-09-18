@@ -5,3 +5,4 @@ maintenance_large.csv
 *.exe
 *.o
 tests/test_validation
+.vscode/

@@ -179,6 +179,21 @@ int ensure_csv_exists(void)
 
     printf("No maintenance data file found at '%s'.\n", path);
 
+    FILE *sample = fopen(SAMPLE_CSV_FILE, "r");
+    if (!sample)
+    {
+        printf("Sample file '%s' not found. Creating an empty maintenance file instead.\n", SAMPLE_CSV_FILE);
+        if (write_blank_csv(path) != 0)
+        {
+            return -1;
+        }
+
+        printf("Created empty maintenance file at '%s'.\n", path);
+        return 0;
+    }
+
+    fclose(sample);
+
     int choice = prompt_copy_from_sample();
     if (choice < 0)
     {
