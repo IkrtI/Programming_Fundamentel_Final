@@ -17,9 +17,15 @@
 #define MAX_DATE 16
 #define MAX_DETAILS 256
 
+#define INPUT_OK 0
+#define INPUT_ERROR -1
+#define INPUT_CANCELLED -2
+#define INPUT_TOO_LONG -3
+
 int ensure_csv_exists(void);
 int load_records(void);
 int save_all_records(void);
+int reload_records_with_warning(void);
 void display_records(void);
 void add_record(void);
 void search_records(void);
@@ -36,10 +42,12 @@ int is_valid_machine_id(const char *str);
 int is_valid_date(const char *str);
 int is_valid_details(const char *str);
 int contains_disallowed_csv_chars(const char *str);
-void prompt_optional_update(const char *prompt, char *dest, int dest_size,
-                            int (*validator)(const char *), const char *error_message);
+int prompt_optional_update(const char *prompt, char *dest, int dest_size,
+                           int (*validator)(const char *), const char *error_message);
 int maintenance_set_csv_path(const char *path);
 const char *maintenance_get_csv_path(void);
+int contains_cancel_signal(const char *str);
+int is_record_storage_full(void);
 
 extern int record_count;
 
