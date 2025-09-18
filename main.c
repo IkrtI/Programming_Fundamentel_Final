@@ -216,7 +216,7 @@ int load_records(void)
         if (is_record_storage_full())
         {
             overflow_detected = 1;
-            continue;
+            break;
         }
 
         snprintf(machineName[record_count], MAX_NAME, "%s", n);
