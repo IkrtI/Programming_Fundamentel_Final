@@ -402,6 +402,7 @@ int safe_input(char *buffer, int size, const char *prompt)
     }
 
     printf("%s", prompt);
+    fflush(stdout);
     if (fgets(buffer, size, stdin) == NULL)
     {
         return -1;
