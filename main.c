@@ -31,8 +31,10 @@ int maintenance_set_csv_path(const char *path)
         return -1;
     }
 
-    if (snprintf(csv_file_path, sizeof(csv_file_path), "%s", path) < 0)
+    int written = snprintf(csv_file_path, sizeof(csv_file_path), "%s", path);
+    if (written >= sizeof(csv_file_path))
     {
+        // Truncation occurred
         return -1;
     }
 
