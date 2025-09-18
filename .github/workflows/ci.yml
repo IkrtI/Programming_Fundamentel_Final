@@ -79,7 +79,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           $destination = Join-Path dist '${{ matrix.packaged_name }}'
           Copy-Item maint.exe $destination -Force
-          Compress-Archive -Path '${{ matrix.packaged_name }}' -DestinationPath '${{ matrix.artifact_name }}.zip' -Force -WorkingDirectory dist
+          Push-Location dist
+          Compress-Archive -Path '${{ matrix.packaged_name }}' -DestinationPath "../${{ matrix.artifact_name }}.zip" -Force
+          Pop-Location
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
