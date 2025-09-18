@@ -1,5 +1,8 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "maintenance.h"
 
@@ -107,6 +110,32 @@ static void test_is_valid_details(void)
     EXPECT_TRUE(!is_valid_details(invalid));
 }
 
+static void test_contains_cancel_signal(void)
+{
+    char with_cancel[] = {'A', 0x18, 'B', '\0'};
+    char no_cancel[] = "Normal text";
+
+    EXPECT_TRUE(contains_cancel_signal(with_cancel));
+    EXPECT_TRUE(!contains_cancel_signal(no_cancel));
+    EXPECT_TRUE(!contains_cancel_signal(NULL));
+}
+
+static void test_is_record_storage_full(void)
+{
+    int original = record_count;
+
+    record_count = 0;
+    EXPECT_TRUE(!is_record_storage_full());
+
+    record_count = MAX_RECORDS;
+    EXPECT_TRUE(is_record_storage_full());
+
+    record_count = -1;
+    EXPECT_TRUE(is_record_storage_full());
+
+    record_count = original;
+}
+
 static void test_csv_path_management(void)
 {
     char original[CSV_PATH_MAX];
@@ -131,6 +160,44 @@ static void test_csv_path_management(void)
     EXPECT_STREQ(original, maintenance_get_csv_path());
 }
 
+static void test_reload_records_with_warning(void)
+{
+    char original[CSV_PATH_MAX];
+    snprintf(original, sizeof(original), "%s", maintenance_get_csv_path());
+
+    EXPECT_TRUE(maintenance_set_csv_path("tests/nonexistent.csv") == 0);
+
+    FILE *capture = tmpfile();
+    EXPECT_TRUE(capture != NULL);
+
+    int saved_stdout_fd = dup(fileno(stdout));
+    EXPECT_TRUE(saved_stdout_fd >= 0);
+
+    int capture_fd = fileno(capture);
+    EXPECT_TRUE(capture_fd >= 0);
+
+    fflush(stdout);
+    EXPECT_TRUE(dup2(capture_fd, fileno(stdout)) >= 0);
+
+    int rc = reload_records_with_warning();
+
+    fflush(stdout);
+    EXPECT_TRUE(dup2(saved_stdout_fd, fileno(stdout)) >= 0);
+    close(saved_stdout_fd);
+
+    rewind(capture);
+    char buffer[256];
+    size_t read = fread(buffer, 1, sizeof(buffer) - 1, capture);
+    buffer[read] = '\0';
+    fclose(capture);
+
+    EXPECT_TRUE(rc != 0);
+    EXPECT_TRUE(strstr(buffer, "Warning: Failed to reload records") != NULL);
+
+    EXPECT_TRUE(maintenance_set_csv_path(original) == 0);
+    EXPECT_STREQ(original, maintenance_get_csv_path());
+}
+
 int main(void)
 {
     test_trim_whitespace();
@@ -141,7 +208,10 @@ int main(void)
     test_is_valid_machine_id();
     test_is_valid_date();
     test_is_valid_details();
+    test_contains_cancel_signal();
+    test_is_record_storage_full();
     test_csv_path_management();
+    test_reload_records_with_warning();
 
     if (tests_failed != 0)
     {
