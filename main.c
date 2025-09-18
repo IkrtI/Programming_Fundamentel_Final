@@ -3,13 +3,9 @@
 #include <ctype.h>
 #include <stdlib.h>
 
-#define CSV_FILE "maintenance.csv"
+#include "maintenance.h"
 
-#define MAX_RECORDS 1000
-#define MAX_NAME 64
-#define MAX_ID 32
-#define MAX_DATE 16
-#define MAX_DETAILS 256
+static char csv_file_path[CSV_PATH_MAX] = CSV_FILE_DEFAULT;
 
 char machineName[MAX_RECORDS][MAX_NAME];
 char machineID[MAX_RECORDS][MAX_ID];
@@ -17,30 +13,37 @@ char maintenanceDate[MAX_RECORDS][MAX_DATE];
 char maintenanceDetails[MAX_RECORDS][MAX_DETAILS];
 int record_count = 0;
 
+const char *maintenance_get_csv_path(void)
+{
+    return csv_file_path;
+}
+
+int maintenance_set_csv_path(const char *path)
+{
+    if (!path || path[0] == '\0')
+    {
+        return -1;
+    }
+
+    size_t len = strlen(path);
+    if (len >= CSV_PATH_MAX)
+    {
+        return -1;
+    }
+
+    int written = snprintf(csv_file_path, sizeof(csv_file_path), "%s", path);
+    if (written >= sizeof(csv_file_path))
+    {
+        // Truncation occurred
+        return -1;
+    }
+
+    return 0;
+}
+
+#ifndef UNIT_TEST
 void display_menu(void);
-int ensure_csv_exists(void);
-int load_records(void);
-int save_all_records(void);
-void display_records(void);
-void add_record(void);
-void search_records(void);
-void update_record(void);
-void delete_record(void);
-int safe_input(char *buffer, int size, const char *prompt);
-int prompt_with_validation(char *buffer, int size, const char *prompt,
-                           int (*validator)(const char *), const char *error_message);
 int read_menu_choice(void);
-void trim_whitespace(char *str);
-void flush_line(void);
-void sanitize_input(char *buffer);
-int is_non_empty(const char *str);
-int is_valid_machine_name(const char *str);
-int is_valid_machine_id(const char *str);
-int is_valid_date(const char *str);
-int is_valid_details(const char *str);
-int contains_disallowed_csv_chars(const char *str);
-void prompt_optional_update(const char *prompt, char *dest, int dest_size,
-                            int (*validator)(const char *), const char *error_message);
 
 int main(void)
 {
@@ -103,7 +106,9 @@ int main(void)
 
     return 0;
 }
+#endif /* UNIT_TEST */
 
+#ifndef UNIT_TEST
 void display_menu(void)
 {
     printf("\nMachine Maintenance Manager\n");
@@ -114,17 +119,19 @@ void display_menu(void)
     printf("5. Delete record\n");
     printf("6. Exit\n");
 }
+#endif
 
 int ensure_csv_exists(void)
 {
-    FILE *f = fopen(CSV_FILE, "r");
+    const char *path = maintenance_get_csv_path();
+    FILE *f = fopen(path, "r");
     if (f)
     {
         fclose(f);
         return 0;
     }
 
-    f = fopen(CSV_FILE, "w");
+    f = fopen(path, "w");
     if (!f)
     {
         perror("Create CSV");
@@ -141,7 +148,8 @@ int ensure_csv_exists(void)
 
 int load_records(void)
 {
-    FILE *file = fopen(CSV_FILE, "r");
+    const char *path = maintenance_get_csv_path();
+    FILE *file = fopen(path, "r");
     if (!file)
     {
         perror("Open CSV");
@@ -181,7 +189,8 @@ int load_records(void)
 
 int save_all_records(void)
 {
-    FILE *file = fopen(CSV_FILE, "w");
+    const char *path = maintenance_get_csv_path();
+    FILE *file = fopen(path, "w");
     if (!file)
     {
         perror("Open CSV for write");
@@ -429,6 +438,7 @@ int prompt_with_validation(char *buffer, int size, const char *prompt,
     }
 }
 
+#ifndef UNIT_TEST
 int read_menu_choice(void)
 {
     char buffer[16];
@@ -457,6 +467,7 @@ int read_menu_choice(void)
         printf("Invalid choice. Please enter a number between 1 and 6.\n");
     }
 }
+#endif
 
 void trim_whitespace(char *str)
 {
@@ -595,13 +606,9 @@ int is_valid_date(const char *str)
         }
     }
 
-    char year_buf[5], month_buf[3], day_buf[3];
-    memcpy(year_buf, str, 4); year_buf[4] = '\0';
-    memcpy(month_buf, str + 5, 2); month_buf[2] = '\0';
-    memcpy(day_buf, str + 8, 2); day_buf[2] = '\0';
-    int year = atoi(year_buf);
-    int month = atoi(month_buf);
-    int day = atoi(day_buf);
+    int year = (str[0] - '0') * 1000 + (str[1] - '0') * 100 + (str[2] - '0') * 10 + (str[3] - '0');
+    int month = (str[5] - '0') * 10 + (str[6] - '0');
+    int day = (str[8] - '0') * 10 + (str[9] - '0');
 
     if (month < 1 || month > 12)
     {
@@ -647,7 +654,7 @@ void prompt_optional_update(const char *prompt, char *dest, int dest_size,
     {
         return;
     }
-
+  
     char buffer[dest_size];
 
     while (1)
