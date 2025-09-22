@@ -78,23 +78,29 @@ jobs:
         shell: msys2 {0}
         run: gcc -std=c11 -Wall -Wextra -O2 -o maint.exe main.c
 
-      - name: Run unit tests
+      - name: Run unit and end-to-end tests
         if: runner.os != 'Windows'
         run: |
           set -o pipefail
           LOG_FILE="test-results-${{ matrix.artifact_name }}.txt"
+          : > "$LOG_FILE"
           gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_validation tests/test_validation.c main.c
-          ./tests/test_validation | tee "$LOG_FILE"
+          ./tests/test_validation | tee -a "$LOG_FILE"
+          gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_end_to_end tests/test_end_to_end.c main.c
+          ./tests/test_end_to_end | tee -a "$LOG_FILE"
           echo "UNIT_TEST_LOG=$LOG_FILE" >> "$GITHUB_ENV"
 
-      - name: Run unit tests (Windows)
+      - name: Run unit and end-to-end tests (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
           set -o pipefail
           LOG_FILE="test-results-${{ matrix.artifact_name }}.txt"
+          : > "$LOG_FILE"
           gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_validation.exe tests/test_validation.c main.c
-          ./tests/test_validation.exe | tee "$LOG_FILE"
+          ./tests/test_validation.exe | tee -a "$LOG_FILE"
+          gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_end_to_end.exe tests/test_end_to_end.c main.c
+          ./tests/test_end_to_end.exe | tee -a "$LOG_FILE"
           GITHUB_ENV_POSIX="$(cygpath "$GITHUB_ENV")"
           echo "UNIT_TEST_LOG=$LOG_FILE" >> "$GITHUB_ENV_POSIX"
 
