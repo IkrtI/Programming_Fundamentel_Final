@@ -29,8 +29,9 @@ gcc -std=c11 -Wall -Wextra -O2 -o maint main.c
 รันทดสอบแบบหน่วย (unit test):
 
 ```bash
-gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_validation tests/test_validation.c main.c
-./tests/test_validation
+gcc -std=c11 -Wall -Wextra -O2 -DEND_TO_END_TEST -DUNIT_TEST -I. \
+    -o tests/test_end_to_end tests/test_end_to_end.c main.c
+./tests/test_end_to_end
 ```
 
 รันทดสอบแบบ End-To-End Test:
