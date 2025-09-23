@@ -2,6 +2,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
+#include <signal.h>
 
 #include "maintenance.h"
 
@@ -15,11 +16,16 @@ char maintenanceDate[MAX_RECORDS][MAX_DATE];
 char maintenanceDetails[MAX_RECORDS][MAX_DETAILS];
 int record_count = 0;
 
+static volatile sig_atomic_t interrupt_requested = 0;
+
 static void print_cancel_message(void)
 {
     printf("\nOperation cancelled. Returning to Machine Maintenance Manager.\n");
 }
 
+static void clear_console(void);
+static void clear_record_storage(void);
+static void handle_sigint(int signal);
 static void flush_line(void);
 static int prompt_copy_from_sample(void);
 static int write_blank_csv(const char *path);
@@ -98,6 +104,8 @@ int main(void)
 {
     int choice;
 
+    signal(SIGINT, handle_sigint);
+
     if (ensure_csv_exists() != 0)
         return 1;
 
@@ -110,8 +118,22 @@ int main(void)
 
     do
     {
+        if (interrupt_requested)
+        {
+            clear_record_storage();
+            printf("\nCtrl+C detected. Cleared maintenance data from memory before exiting.\n");
+            break;
+        }
+
         display_menu();
         choice = read_menu_choice();
+
+        if (interrupt_requested)
+        {
+            clear_record_storage();
+            printf("\nCtrl+C detected. Cleared maintenance data from memory before exiting.\n");
+            break;
+        }
 
         switch (choice)
         {
@@ -143,12 +165,16 @@ int main(void)
             }
             break;
         case 6:
+            clear_console();
+            break;
+        case 7:
+            clear_record_storage();
             printf("Exiting...\n");
             break;
         default:
             printf("Invalid choice. Please try again.\n");
         }
-    } while (choice != 6);
+    } while (choice != 7);
 
     return 0;
 }
@@ -163,7 +189,8 @@ void display_menu(void)
     printf("3. Search record\n");
     printf("4. Update record\n");
     printf("5. Delete record\n");
-    printf("6. Exit\n");
+    printf("6. Clear console\n");
+    printf("7. Exit\n");
 }
 #endif
 
@@ -725,7 +752,7 @@ int read_menu_choice(void)
         if (status == INPUT_ERROR)
         {
             printf("Input error detected. Exiting menu.\n");
-            return 6;
+            return 7;
         }
 
         if (status == INPUT_TOO_LONG)
@@ -735,18 +762,18 @@ int read_menu_choice(void)
 
         if (buffer[0] == '\0')
         {
-            printf("Invalid choice. Please enter a number between 1 and 6.\n");
+            printf("Invalid choice. Please enter a number between 1 and 7.\n");
             continue;
         }
 
         char *endptr = NULL;
         long value = strtol(buffer, &endptr, 10);
-        if (endptr != NULL && *endptr == '\0' && value >= 1 && value <= 6)
+        if (endptr != NULL && *endptr == '\0' && value >= 1 && value <= 7)
         {
             return (int)value;
         }
 
-        printf("Invalid choice. Please enter a number between 1 and 6.\n");
+        printf("Invalid choice. Please enter a number between 1 and 7.\n");
     }
 }
 #endif
@@ -783,6 +810,30 @@ static void flush_line(void)
     while ((ch = getchar()) != '\n' && ch != EOF)
     {
     }
+}
+
+static void clear_record_storage(void)
+{
+    memset(machineName, 0, sizeof(machineName));
+    memset(machineID, 0, sizeof(machineID));
+    memset(maintenanceDate, 0, sizeof(maintenanceDate));
+    memset(maintenanceDetails, 0, sizeof(maintenanceDetails));
+    record_count = 0;
+}
+
+static void handle_sigint(int signal)
+{
+    (void)signal;
+    interrupt_requested = 1;
+}
+
+static void clear_console(void)
+{
+#ifdef _WIN32
+    system("cls");
+#else
+    system("clear");
+#endif
 }
 
 void sanitize_input(char *buffer)
