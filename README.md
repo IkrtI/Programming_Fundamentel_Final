@@ -33,6 +33,13 @@ gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_validation tests/te
 ./tests/test_validation
 ```
 
+รันทดสอบแบบ End-To-End Test:
+
+```bash
+gcc -std=c11 -Wall -Wextra -O2 -DEND_TO_END_TEST -I. -o tests/test_end_to_end tests/test_end_to_end.c main.c
+./tests/test_end_to_end
+```
+
 ### Run
 
 ```bash
