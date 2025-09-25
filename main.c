@@ -5,12 +5,14 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <signal.h>
-#include <unistd.h>
 #include <errno.h>
-#ifndef _WIN32
+#ifdef _WIN32
+#include <io.h>
 #include <fcntl.h>
-#else
 #include <conio.h>
+#else
+#include <unistd.h>
+#include <fcntl.h>
 #endif
 
 #include "maintenance.h"
@@ -1142,6 +1144,21 @@ static int assertions_failed = 0;
         }                                                                                          \
     } while (0)
 
+static void close_fd_safely(int *fd)
+{
+    if (!fd || *fd < 0)
+    {
+        return;
+    }
+
+#ifdef _WIN32
+    _close(*fd);
+#else
+    close(*fd);
+#endif
+    *fd = -1;
+}
+
 static int redirect_stdin_from_string(const char *text, int *saved_fd, FILE **temp_file)
 {
     if (!text || !saved_fd || !temp_file)
@@ -1149,54 +1166,99 @@ static int redirect_stdin_from_string(const char *text, int *saved_fd, FILE **te
         return -1;
     }
 
+#ifdef _WIN32
+    *saved_fd = _dup(_fileno(stdin));
+#else
     *saved_fd = dup(fileno(stdin));
+#endif
     if (*saved_fd < 0)
     {
         return -1;
     }
 
-    *temp_file = tmpfile();
-    if (!*temp_file)
+    size_t len = strlen(text);
+    const char *cursor = text;
+    int pipefd[2];
+
+#ifdef _WIN32
+    if (_pipe(pipefd, 0, _O_TEXT) != 0)
     {
-        close(*saved_fd);
-        *saved_fd = -1;
+        close_fd_safely(saved_fd);
         return -1;
     }
-
-    if (fputs(text, *temp_file) == EOF)
+#else
+    if (pipe(pipefd) != 0)
     {
-        fclose(*temp_file);
+        close_fd_safely(saved_fd);
+        return -1;
+    }
+#endif
+
+    while (len > 0)
+    {
+#ifdef _WIN32
+        int written = _write(pipefd[1], cursor, (unsigned int)len);
+#else
+        ssize_t written = write(pipefd[1], cursor, len);
+#endif
+        if (written <= 0)
+        {
+#ifdef _WIN32
+            _close(pipefd[0]);
+            _close(pipefd[1]);
+#else
+            close(pipefd[0]);
+            close(pipefd[1]);
+#endif
+            close_fd_safely(saved_fd);
+            return -1;
+        }
+        cursor += written;
+        len -= (size_t)written;
+    }
+
+#ifdef _WIN32
+    _close(pipefd[1]);
+    if (_dup2(pipefd[0], _fileno(stdin)) != 0)
+    {
+        _close(pipefd[0]);
+        close_fd_safely(saved_fd);
+        return -1;
+    }
+    _close(pipefd[0]);
+#else
+    close(pipefd[1]);
+    if (dup2(pipefd[0], fileno(stdin)) < 0)
+    {
+        close(pipefd[0]);
+        close_fd_safely(saved_fd);
+        return -1;
+    }
+    close(pipefd[0]);
+#endif
+
+    if (temp_file)
+    {
         *temp_file = NULL;
-        close(*saved_fd);
-        *saved_fd = -1;
-        return -1;
     }
 
-    rewind(*temp_file);
-
-    if (dup2(fileno(*temp_file), fileno(stdin)) < 0)
-    {
-        fclose(*temp_file);
-        *temp_file = NULL;
-        close(*saved_fd);
-        *saved_fd = -1;
-        return -1;
-    }
-
+    clearerr(stdin);
     return 0;
 }
 
 static void restore_stdin(int saved_fd, FILE *temp_file)
 {
+    (void)temp_file;
+
     if (saved_fd >= 0)
     {
+#ifdef _WIN32
+        _dup2(saved_fd, _fileno(stdin));
+        _close(saved_fd);
+#else
         dup2(saved_fd, fileno(stdin));
         close(saved_fd);
-    }
-
-    if (temp_file)
-    {
-        fclose(temp_file);
+#endif
     }
 
     clearerr(stdin);
@@ -1211,25 +1273,61 @@ static int start_stdout_capture(FILE **capture_file, int *saved_fd)
 
     fflush(stdout);
 
+#ifdef _WIN32
+    *saved_fd = _dup(_fileno(stdout));
+#else
     *saved_fd = dup(fileno(stdout));
+#endif
     if (*saved_fd < 0)
     {
         return -1;
     }
 
-    *capture_file = tmpfile();
-    if (!*capture_file)
+    int pipefd[2];
+
+#ifdef _WIN32
+    if (_pipe(pipefd, 0, _O_TEXT) != 0)
     {
-        close(*saved_fd);
-        *saved_fd = -1;
+        close_fd_safely(saved_fd);
         return -1;
     }
-
-    if (dup2(fileno(*capture_file), fileno(stdout)) < 0)
+    if (_dup2(pipefd[1], _fileno(stdout)) != 0)
     {
-        fclose(*capture_file);
-        *capture_file = NULL;
+        _close(pipefd[0]);
+        _close(pipefd[1]);
+        close_fd_safely(saved_fd);
+        return -1;
+    }
+    _close(pipefd[1]);
+    *capture_file = _fdopen(pipefd[0], "r");
+#else
+    if (pipe(pipefd) != 0)
+    {
+        close_fd_safely(saved_fd);
+        return -1;
+    }
+    if (dup2(pipefd[1], fileno(stdout)) < 0)
+    {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        close_fd_safely(saved_fd);
+        return -1;
+    }
+    close(pipefd[1]);
+    *capture_file = fdopen(pipefd[0], "r");
+#endif
+
+    if (!*capture_file)
+    {
+#ifdef _WIN32
+        _close(pipefd[0]);
+        _dup2(*saved_fd, _fileno(stdout));
+        _close(*saved_fd);
+#else
+        close(pipefd[0]);
+        dup2(*saved_fd, fileno(stdout));
         close(*saved_fd);
+#endif
         *saved_fd = -1;
         return -1;
     }
@@ -1240,58 +1338,75 @@ static int start_stdout_capture(FILE **capture_file, int *saved_fd)
 static char *stop_stdout_capture(FILE *capture_file, int saved_fd)
 {
     char *result = NULL;
+    size_t length = 0;
+    size_t capacity = 0;
 
     fflush(stdout);
 
+    if (saved_fd >= 0)
+    {
+#ifdef _WIN32
+        _dup2(saved_fd, _fileno(stdout));
+        _close(saved_fd);
+#else
+        dup2(saved_fd, fileno(stdout));
+        close(saved_fd);
+#endif
+    }
+
     if (capture_file)
     {
-        fflush(capture_file);
-        long size = 0;
-        if (fseek(capture_file, 0, SEEK_END) == 0)
+        char buffer[256];
+        size_t read_bytes;
+        while ((read_bytes = fread(buffer, 1, sizeof(buffer), capture_file)) > 0)
         {
-            long pos = ftell(capture_file);
-            if (pos > 0)
+            if (length + read_bytes + 1 > capacity)
             {
-                size = pos;
+                size_t new_capacity = capacity == 0 ? (read_bytes + 1) : capacity * 2;
+                while (new_capacity < length + read_bytes + 1)
+                {
+                    new_capacity *= 2;
+                }
+                char *new_result = (char *)realloc(result, new_capacity);
+                if (!new_result)
+                {
+                    free(result);
+                    fclose(capture_file);
+                    return NULL;
+                }
+                result = new_result;
+                capacity = new_capacity;
             }
-            fseek(capture_file, 0, SEEK_SET);
-        }
 
-        size_t alloc_size = (size_t)((size > 0) ? size : 0);
-        result = (char *)malloc(alloc_size + 1);
-        if (result)
-        {
-            size_t read = fread(result, 1, alloc_size, capture_file);
-            result[read] = '\0';
-        }
-        else
-        {
-            result = (char *)malloc(1);
-            if (result)
-            {
-                result[0] = '\0';
-            }
+            memcpy(result + length, buffer, read_bytes);
+            length += read_bytes;
         }
 
         fclose(capture_file);
     }
 
-    if (saved_fd >= 0)
-    {
-        fflush(stdout);
-        dup2(saved_fd, fileno(stdout));
-        close(saved_fd);
-    }
-
     if (!result)
     {
         result = (char *)malloc(1);
-        if (result)
+        if (!result)
         {
-            result[0] = '\0';
+            return NULL;
         }
+        capacity = 1;
     }
 
+    if (length + 1 > capacity)
+    {
+        char *new_result = (char *)realloc(result, length + 1);
+        if (!new_result)
+        {
+            free(result);
+            return NULL;
+        }
+        result = new_result;
+    }
+
+    result[length] = '\0';
     return result;
 }
 
