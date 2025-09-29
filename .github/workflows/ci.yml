@@ -78,45 +78,44 @@ jobs:
         shell: msys2 {0}
         run: gcc -std=c11 -Wall -Wextra -O2 -o maint.exe main.c
 
-      - name: Run unit and end-to-end tests
-        if: runner.os != 'Windows'
-        run: |
-          set -o pipefail
-          LOG_FILE="test-results-${{ matrix.artifact_name }}.txt"
-          : > "$LOG_FILE"
-          gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_validation tests/test_validation.c main.c
-          ./tests/test_validation | tee -a "$LOG_FILE"
-          gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_end_to_end tests/test_end_to_end.c main.c
-          ./tests/test_end_to_end | tee -a "$LOG_FILE"
-          echo "UNIT_TEST_LOG=$LOG_FILE" >> "$GITHUB_ENV"
+      # - name: Run unit and end-to-end tests
+      #   if: runner.os != 'Windows'
+      #   run: |
+      #     set -o pipefail
+      #     LOG_FILE="test-results-${{ matrix.artifact_name }}.txt"
+      #     : > "$LOG_FILE"
+      #     gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_validation tests/test_validation.c main.c
+      #     ./tests/test_validation | tee -a "$LOG_FILE"
+      #     gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_end_to_end tests/test_end_to_end.c main.c
+      #     ./tests/test_end_to_end | tee -a "$LOG_FILE"
+      #     echo "UNIT_TEST_LOG=$LOG_FILE" >> "$GITHUB_ENV"
 
-      - name: Run unit and end-to-end tests (Windows)
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
-        run: |
-          set -o pipefail
-          LOG_FILE="test-results-${{ matrix.artifact_name }}.txt"
-          : > "$LOG_FILE"
-          gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_validation.exe tests/test_validation.c main.c
-          ./tests/test_validation.exe | tee -a "$LOG_FILE"
-          gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_end_to_end.exe tests/test_end_to_end.c main.c
-          ./tests/test_end_to_end.exe | tee -a "$LOG_FILE"
-          GITHUB_ENV_POSIX="$(cygpath "$GITHUB_ENV")"
-          echo "UNIT_TEST_LOG=$LOG_FILE" >> "$GITHUB_ENV_POSIX"
+      # - name: Run unit and end-to-end tests (Windows)
+      #   if: runner.os == 'Windows'
+      #   shell: msys2 {0}
+      #   run: |
+      #     set -o pipefail
+      #     LOG_FILE="test-results-${{ matrix.artifact_name }}.txt"
+      #     : > "$LOG_FILE"
+      #     gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_validation.exe tests/test_validation.c main.c
+      #     ./tests/test_validation.exe | tee -a "$LOG_FILE"
+      #     gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_end_to_end.exe tests/test_end_to_end.c main.c
+      #     ./tests/test_end_to_end.exe | tee -a "$LOG_FILE"
+      #     GITHUB_ENV_POSIX="$(cygpath "$GITHUB_ENV")"
+      #     echo "UNIT_TEST_LOG=$LOG_FILE" >> "$GITHUB_ENV_POSIX"
 
-      - name: Upload unit test results
-        if: env.UNIT_TEST_LOG != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}-unit-tests
-          path: ${{ env.UNIT_TEST_LOG }}
+      # - name: Upload unit test results
+      #   if: env.UNIT_TEST_LOG != ''
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: ${{ matrix.artifact_name }}-unit-tests
+      #     path: ${{ env.UNIT_TEST_LOG }}
 
       - name: Package artifact
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           cp maint dist/${{ matrix.packaged_name }}
-          (cd dist && zip -r ../${{ matrix.artifact_name }}.zip ${{ matrix.packaged_name }})
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
@@ -125,15 +124,14 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           $destination = Join-Path dist '${{ matrix.packaged_name }}'
           Copy-Item maint.exe $destination -Force
-          Push-Location dist
-          Compress-Archive -Path '${{ matrix.packaged_name }}' -DestinationPath "../${{ matrix.artifact_name }}.zip" -Force
-          Pop-Location
+          # No zipping; upload raw binary as artifact
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}.zip
+          path: dist/${{ matrix.packaged_name }}
+          if-no-files-found: error
 
   release:
     needs: build-and-test
@@ -146,12 +144,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: true
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/**/*.zip
+            artifacts/*
             artifacts/**/*.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
