@@ -3,6 +3,8 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 #include "maintenance.h"
 
@@ -30,6 +32,15 @@ static void flush_line(void);
 static int prompt_copy_from_sample(void);
 static int write_blank_csv(const char *path);
 static int copy_example_csv(const char *path);
+#ifndef UNIT_TEST
+static int copy_csv_file(const char *source, const char *destination);
+static int show_csv_control_menu(void);
+static int read_csv_menu_choice(size_t csv_count, int *selected_index, char *command);
+static int prompt_csv_index_selection(size_t csv_count, const char *prompt, int *out_index);
+static int has_csv_extension(const char *name);
+static int is_regular_file(const char *path, const struct dirent *entry);
+static int compare_csv_names(const void *lhs, const void *rhs);
+#endif
 
 static int handle_prompt_result(int status, const char *error_message)
 {
@@ -50,6 +61,523 @@ static int handle_prompt_result(int status, const char *error_message)
 
     return 0;
 }
+
+#ifndef UNIT_TEST
+static int has_csv_extension(const char *name)
+{
+    if (!name)
+    {
+        return 0;
+    }
+
+    const char *dot = strrchr(name, '.');
+    if (!dot || dot == name)
+    {
+        return 0;
+    }
+
+    const char *ext = dot + 1;
+    if (tolower((unsigned char)ext[0]) == 'c' &&
+        tolower((unsigned char)ext[1]) == 's' &&
+        tolower((unsigned char)ext[2]) == 'v' &&
+        ext[3] == '\0')
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+static int is_regular_file(const char *path, const struct dirent *entry)
+{
+    if (!path || !entry)
+    {
+        return 0;
+    }
+
+#ifdef DT_REG
+    if (entry->d_type == DT_REG)
+    {
+        return 1;
+    }
+
+    if (entry->d_type != DT_UNKNOWN && entry->d_type != DT_LNK)
+    {
+        return 0;
+    }
+#endif
+
+    struct stat st;
+    if (stat(path, &st) != 0)
+    {
+        return 0;
+    }
+
+    return S_ISREG(st.st_mode);
+}
+
+static int compare_csv_names(const void *lhs, const void *rhs)
+{
+    const char *const *a = lhs;
+    const char *const *b = rhs;
+    if (!a || !b || !*a || !*b)
+    {
+        return 0;
+    }
+
+    return strcmp(*a, *b);
+}
+
+static int copy_csv_file(const char *source, const char *destination)
+{
+    if (!source || !destination)
+    {
+        return -1;
+    }
+
+    FILE *src = fopen(source, "r");
+    if (!src)
+    {
+        perror("Open source CSV");
+        return -1;
+    }
+
+    FILE *dst = fopen(destination, "w");
+    if (!dst)
+    {
+        perror("Create CSV copy");
+        fclose(src);
+        return -1;
+    }
+
+    char buffer[1024];
+    size_t bytes_read;
+    int error = 0;
+
+    while ((bytes_read = fread(buffer, 1, sizeof(buffer), src)) > 0)
+    {
+        if (fwrite(buffer, 1, bytes_read, dst) != bytes_read)
+        {
+            perror("Write CSV");
+            error = 1;
+            break;
+        }
+    }
+
+    if (!error && ferror(src))
+    {
+        perror("Read CSV");
+        error = 1;
+    }
+
+    if (fclose(dst) != 0)
+    {
+        perror("Close CSV after copy");
+        error = 1;
+    }
+
+    if (fclose(src) != 0)
+    {
+        perror("Close source CSV");
+        error = 1;
+    }
+
+    return error ? -1 : 0;
+}
+
+static int prompt_csv_index_selection(size_t csv_count, const char *prompt, int *out_index)
+{
+    if (csv_count == 0 || !prompt || !out_index)
+    {
+        return INPUT_ERROR;
+    }
+
+    char buffer[32];
+
+    while (1)
+    {
+        int status = safe_input(buffer, sizeof(buffer), prompt);
+        if (status == INPUT_CANCELLED)
+        {
+            print_cancel_message();
+            return INPUT_CANCELLED;
+        }
+
+        if (status == INPUT_ERROR)
+        {
+            return INPUT_ERROR;
+        }
+
+        if (status == INPUT_TOO_LONG)
+        {
+            continue;
+        }
+
+        if (buffer[0] == '\0')
+        {
+            printf("Please enter a number between 1 and %zu.\n", csv_count);
+            continue;
+        }
+
+        char *endptr = NULL;
+        long value = strtol(buffer, &endptr, 10);
+        if (endptr && *endptr == '\0' && value >= 1 && (size_t)value <= csv_count)
+        {
+            *out_index = (int)(value - 1);
+            return INPUT_OK;
+        }
+
+        printf("Please enter a number between 1 and %zu.\n", csv_count);
+    }
+}
+
+static int read_csv_menu_choice(size_t csv_count, int *selected_index, char *command)
+{
+    if (!command)
+    {
+        return INPUT_ERROR;
+    }
+
+    char buffer[32];
+
+    while (1)
+    {
+        int status = safe_input(buffer, sizeof(buffer), "Select CSV option: ");
+        if (status == INPUT_CANCELLED)
+        {
+            print_cancel_message();
+            return INPUT_CANCELLED;
+        }
+
+        if (status == INPUT_ERROR)
+        {
+            printf("Input error detected. Leaving CSV menu.\n");
+            return INPUT_ERROR;
+        }
+
+        if (status == INPUT_TOO_LONG)
+        {
+            continue;
+        }
+
+        if (buffer[0] == '\0')
+        {
+            printf("Invalid choice. Enter a number or A/N/C/Q.\n");
+            continue;
+        }
+
+        if (isalpha((unsigned char)buffer[0]) && buffer[1] == '\0')
+        {
+            char c = (char)toupper((unsigned char)buffer[0]);
+            if (c == 'A' || c == 'N' || c == 'C' || c == 'Q')
+            {
+                *command = c;
+                if (selected_index)
+                {
+                    *selected_index = -1;
+                }
+                return INPUT_OK;
+            }
+        }
+
+        char *endptr = NULL;
+        long value = strtol(buffer, &endptr, 10);
+        if (endptr && *endptr == '\0' && value >= 1 && (size_t)value <= csv_count)
+        {
+            if (selected_index)
+            {
+                *selected_index = (int)(value - 1);
+            }
+            *command = 'S';
+            return INPUT_OK;
+        }
+
+        if (csv_count > 0)
+        {
+            printf("Invalid choice. Enter a number between 1 and %zu or A/N/C/Q.\n", csv_count);
+        }
+        else
+        {
+            printf("Invalid choice. Enter A/N/C/Q.\n");
+        }
+    }
+}
+
+static int show_csv_control_menu(void)
+{
+    DIR *dir = opendir(".");
+    char **csv_files = NULL;
+    size_t csv_count = 0;
+    size_t capacity = 0;
+
+    if (dir)
+    {
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL)
+        {
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+            {
+                continue;
+            }
+
+            if (!has_csv_extension(entry->d_name))
+            {
+                continue;
+            }
+
+            if (!is_regular_file(entry->d_name, entry))
+            {
+                continue;
+            }
+
+            size_t len = strlen(entry->d_name) + 1;
+            if (len >= CSV_PATH_MAX)
+            {
+                continue;
+            }
+
+            if (csv_count == capacity)
+            {
+                size_t new_capacity = capacity == 0 ? 8 : capacity * 2;
+                char **tmp = realloc(csv_files, new_capacity * sizeof(char *));
+                if (!tmp)
+                {
+                    break;
+                }
+                csv_files = tmp;
+                capacity = new_capacity;
+            }
+
+            csv_files[csv_count] = malloc(len);
+            if (!csv_files[csv_count])
+            {
+                break;
+            }
+
+            memcpy(csv_files[csv_count], entry->d_name, len);
+            csv_count++;
+        }
+
+        closedir(dir);
+    }
+    else
+    {
+        perror("Open working directory");
+    }
+
+    if (csv_count > 1)
+    {
+        qsort(csv_files, csv_count, sizeof(char *), compare_csv_names);
+    }
+
+    const char *current_path = maintenance_get_csv_path();
+    printf("\nCSV File Management\n");
+    for (size_t i = 0; i < csv_count; ++i)
+    {
+        printf("%zu. %s\n", i + 1, csv_files[i]);
+    }
+
+    printf("A. Enter CSV file path manually\n");
+    printf("N. Create a new blank CSV file\n");
+    if (csv_count > 0)
+    {
+        printf("C. Copy an existing CSV file\n");
+    }
+    printf("Q. Keep current CSV (%s)\n", current_path && current_path[0] != '\0' ? current_path : "default");
+
+    int result = 1;
+
+    while (!interrupt_requested)
+    {
+        int selected_index = -1;
+        char command = '\0';
+        int status = read_csv_menu_choice(csv_count, &selected_index, &command);
+        if (status == INPUT_CANCELLED)
+        {
+            break;
+        }
+
+        if (status == INPUT_ERROR)
+        {
+            result = -1;
+            break;
+        }
+
+        if (command == 'S' && selected_index >= 0 && (size_t)selected_index < csv_count)
+        {
+            const char *path = csv_files[selected_index];
+            if (maintenance_set_csv_path(path) == 0)
+            {
+                printf("Using CSV file: %s\n", path);
+                result = 0;
+                break;
+            }
+
+            printf("Failed to set CSV path to '%s'.\n", path);
+        }
+        else if (command == 'A')
+        {
+            char path_buffer[CSV_PATH_MAX];
+            int input_status = safe_input(path_buffer, sizeof(path_buffer), "Enter CSV file path: ");
+            if (input_status == INPUT_CANCELLED)
+            {
+                print_cancel_message();
+                break;
+            }
+
+            if (input_status == INPUT_ERROR)
+            {
+                printf("Input error detected. Leaving CSV menu.\n");
+                result = -1;
+                break;
+            }
+
+            if (input_status == INPUT_TOO_LONG || path_buffer[0] == '\0')
+            {
+                printf("Path cannot be empty.\n");
+                continue;
+            }
+
+            if (maintenance_set_csv_path(path_buffer) != 0)
+            {
+                printf("Failed to set CSV path to '%s'.\n", path_buffer);
+                continue;
+            }
+
+            printf("Using CSV file: %s\n", path_buffer);
+            result = 0;
+            break;
+        }
+        else if (command == 'N')
+        {
+            char filename[CSV_PATH_MAX];
+            int input_status = safe_input(filename, sizeof(filename), "Enter name for new CSV file: ");
+            if (input_status == INPUT_CANCELLED)
+            {
+                print_cancel_message();
+                break;
+            }
+
+            if (input_status == INPUT_ERROR)
+            {
+                printf("Input error detected. Leaving CSV menu.\n");
+                result = -1;
+                break;
+            }
+
+            if (input_status == INPUT_TOO_LONG || filename[0] == '\0')
+            {
+                printf("Filename cannot be empty.\n");
+                continue;
+            }
+
+            if (write_blank_csv(filename) != 0)
+            {
+                printf("Failed to create new CSV file '%s'.\n", filename);
+                continue;
+            }
+
+            if (maintenance_set_csv_path(filename) != 0)
+            {
+                printf("Failed to set CSV path to '%s'.\n", filename);
+                continue;
+            }
+
+            printf("Created new CSV file: %s\n", filename);
+            reload_records_with_warning();
+            result = 0;
+            break;
+        }
+        else if (command == 'C')
+        {
+            if (csv_count == 0)
+            {
+                printf("No CSV files available to copy.\n");
+                continue;
+            }
+
+            int source_index = -1;
+            int index_status = prompt_csv_index_selection(csv_count, "Enter the number of the CSV to copy: ", &source_index);
+            if (index_status == INPUT_CANCELLED)
+            {
+                break;
+            }
+
+            if (index_status == INPUT_ERROR)
+            {
+                printf("Input error detected. Leaving CSV menu.\n");
+                result = -1;
+                break;
+            }
+
+            char destination[CSV_PATH_MAX];
+            int dest_status = safe_input(destination, sizeof(destination), "Enter name for the new CSV file: ");
+            if (dest_status == INPUT_CANCELLED)
+            {
+                print_cancel_message();
+                break;
+            }
+
+            if (dest_status == INPUT_ERROR)
+            {
+                printf("Input error detected. Leaving CSV menu.\n");
+                result = -1;
+                break;
+            }
+
+            if (dest_status == INPUT_TOO_LONG || destination[0] == '\0')
+            {
+                printf("Filename cannot be empty.\n");
+                continue;
+            }
+
+            if (copy_csv_file(csv_files[source_index], destination) != 0)
+            {
+                printf("Failed to copy '%s' to '%s'.\n", csv_files[source_index], destination);
+                continue;
+            }
+
+            if (maintenance_set_csv_path(destination) != 0)
+            {
+                printf("Failed to set CSV path to '%s'.\n", destination);
+                continue;
+            }
+
+            printf("Copied '%s' to '%s'.\n", csv_files[source_index], destination);
+            reload_records_with_warning();
+            result = 0;
+            break;
+        }
+        else if (command == 'Q')
+        {
+            if (current_path && current_path[0] != '\0')
+            {
+                printf("Keeping existing CSV file: %s\n", current_path);
+            }
+            else
+            {
+                printf("Keeping existing CSV file configuration.\n");
+            }
+            result = 1;
+            break;
+        }
+    }
+
+    for (size_t i = 0; i < csv_count; ++i)
+    {
+        free(csv_files[i]);
+    }
+    free(csv_files);
+
+    if (interrupt_requested)
+    {
+        return -1;
+    }
+
+    return result;
+}
+
+#endif /* UNIT_TEST */
 
 int reload_records_with_warning(void)
 {
@@ -105,6 +633,19 @@ int main(void)
     int choice;
 
     signal(SIGINT, handle_sigint);
+
+    int csv_menu_status = show_csv_control_menu();
+    if (csv_menu_status < 0)
+    {
+        return 1;
+    }
+
+    if (interrupt_requested)
+    {
+        clear_record_storage();
+        printf("\nCtrl+C detected. Cleared maintenance data from memory before exiting.\n");
+        return 1;
+    }
 
     if (ensure_csv_exists() != 0)
         return 1;
