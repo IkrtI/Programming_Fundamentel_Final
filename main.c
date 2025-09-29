@@ -1,3 +1,9 @@
+#if !defined(_WIN32)
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#endif
+
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
@@ -512,27 +518,33 @@ static int prompt_machine_id(char *buffer, size_t size)
             return INPUT_OK;
         }
 
-        int value = 0;
-        if (parse_machine_id_value(input, &value) != 0)
+        if (!is_valid_machine_id(input))
         {
-            printf("Machine ID must be a positive whole number.\n");
+            printf("Machine ID may only contain letters, numbers, '-', '_' or '.'.\n");
             continue;
         }
 
         char normalized[MAX_ID];
-        if (normalize_machine_id_value(value, normalized, sizeof(normalized)) != 0)
+        const char *final_id = input;
+
+        int value = 0;
+        if (parse_machine_id_value(input, &value) == 0)
         {
-            printf("Machine ID is invalid or too large.\n");
+            if (normalize_machine_id_value(value, normalized, sizeof(normalized)) != 0)
+            {
+                printf("Machine ID is invalid or too large.\n");
+                continue;
+            }
+            final_id = normalized;
+        }
+
+        if (!is_machine_id_unique(final_id))
+        {
+            printf("Machine ID '%s' already exists.\n", final_id);
             continue;
         }
 
-        if (!is_machine_id_unique(normalized))
-        {
-            printf("Machine ID '%s' already exists.\n", normalized);
-            continue;
-        }
-
-        int written = snprintf(buffer, size, "%s", normalized);
+        int written = snprintf(buffer, size, "%s", final_id);
         if (written < 0 || (size_t)written >= size)
         {
             printf("Failed to store machine ID.\n");
@@ -559,6 +571,12 @@ static int prompt_confirmation(const char *prompt, int *out_confirmed)
         {
             printf("Please enter Y or N.\n");
             continue;
+        }
+
+        if (status == INPUT_ERROR)
+        {
+            *out_confirmed = 1;
+            return INPUT_OK;
         }
 
         if (status != INPUT_OK)
@@ -2483,7 +2501,7 @@ void update_record(void)
 
     int status = prompt_with_validation(id, MAX_ID, "Enter machine ID to update: ",
                                         is_valid_machine_id,
-                                        "Machine ID must be a positive whole number.");
+                                        "Machine ID may only contain letters, numbers, '-', '_' or '.'.");
     if (handle_prompt_result(status, "Error reading machine ID."))
     {
         return;
@@ -2616,7 +2634,7 @@ void delete_record(void)
 
     int status = prompt_with_validation(id, MAX_ID, "Enter machine ID to delete: ",
                                         is_valid_machine_id,
-                                        "Machine ID must be a positive whole number.");
+                                        "Machine ID may only contain letters, numbers, '-', '_' or '.'.");
     if (handle_prompt_result(status, "Error reading machine ID."))
     {
         return;
@@ -3135,8 +3153,21 @@ int is_valid_machine_name(const char *str)
 
 int is_valid_machine_id(const char *str)
 {
-    int value = 0;
-    return parse_machine_id_value(str, &value) == 0;
+    if (!str || str[0] == '\0')
+    {
+        return 0;
+    }
+
+    for (const char *p = str; *p; ++p)
+    {
+        unsigned char ch = (unsigned char)*p;
+        if (!isalnum(ch) && ch != '-' && ch != '_' && ch != '.')
+        {
+            return 0;
+        }
+    }
+
+    return 1;
 }
 
 int is_valid_date(const char *str)
