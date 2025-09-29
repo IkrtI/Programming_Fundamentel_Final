@@ -11,7 +11,7 @@
 #define CSV_PATH_MAX 512
 #endif
 
-#define MAX_RECORDS 1000
+#define MAX_RECORDS 10000
 #define MAX_NAME 64
 #define MAX_ID 32
 #define MAX_DATE 16
@@ -21,6 +21,8 @@
 #define INPUT_ERROR -1
 #define INPUT_CANCELLED -2
 #define INPUT_TOO_LONG -3
+#define INPUT_EXIT -4
+#define INPUT_BACK -5
 
 int ensure_csv_exists(void);
 int load_records(void);

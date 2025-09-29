@@ -5,6 +5,15 @@
 #include <signal.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <errno.h>
+#include <limits.h>
+
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
+#if !defined(_WIN32) && !defined(UNIT_TEST)
+#include <termios.h>
+#endif
 
 #include "maintenance.h"
 
@@ -18,21 +27,36 @@ char maintenanceDate[MAX_RECORDS][MAX_DATE];
 char maintenanceDetails[MAX_RECORDS][MAX_DETAILS];
 int record_count = 0;
 
+typedef enum record_result
+{
+    RECORD_SUCCESS = 0,
+    RECORD_ERROR_STORAGE_FULL = -1,
+    RECORD_ERROR_INVALID_DATA = -2,
+    RECORD_ERROR_DUPLICATE_ID = -3,
+    RECORD_ERROR_NOT_FOUND = -4
+} record_result_t;
+
+static record_result_t add_record_direct(const char *name, const char *id,
+                                         const char *date, const char *details);
+static record_result_t delete_record_direct(const char *id);
+static void run_test_program(void);
+
 static volatile sig_atomic_t interrupt_requested = 0;
+static volatile sig_atomic_t exit_requested = 0;
 
 static void print_cancel_message(void)
 {
     printf("\nOperation cancelled. Returning to Machine Maintenance Manager.\n");
 }
 
-static void clear_console(void);
 static void clear_record_storage(void);
 static void handle_sigint(int signal);
 static void flush_line(void);
+static void request_exit(void);
+static int exit_program(int status);
 static int prompt_copy_from_sample(void);
 static int write_blank_csv(const char *path);
 static int copy_example_csv(const char *path);
-#ifndef UNIT_TEST
 static int copy_csv_file(const char *source, const char *destination);
 static int show_csv_control_menu(void);
 static int read_csv_menu_choice(size_t csv_count, int *selected_index, char *command);
@@ -40,11 +64,43 @@ static int prompt_csv_index_selection(size_t csv_count, const char *prompt, int 
 static int has_csv_extension(const char *name);
 static int is_regular_file(const char *path, const struct dirent *entry);
 static int compare_csv_names(const void *lhs, const void *rhs);
+static int compare_records_by_schedule(const void *lhs, const void *rhs);
+static void handle_addon_menu(void);
+static void display_addon_menu(void);
+static int read_addon_choice(void);
+static void resequence_machine_ids(void);
+static void print_record_table_header(void);
+static void print_record_table_footer(void);
+static void print_record_table_row(int index);
+static int contains_back_signal(const char *str);
+static int parse_machine_id_value(const char *id, int *out_value);
+static int normalize_machine_id_value(int value, char *buffer, size_t size);
+static int is_machine_id_unique(const char *id);
+static int find_smallest_available_machine_id(void);
+static int prompt_machine_id(char *buffer, size_t size);
+static int string_contains_case_insensitive(const char *haystack, const char *needle);
+#if !defined(_WIN32) && !defined(UNIT_TEST)
+static void restore_terminal_settings(void);
+static int configure_terminal_shortcuts(void);
+static struct termios original_termios;
+static int terminal_configured = 0;
 #endif
 
 static int handle_prompt_result(int status, const char *error_message)
 {
     if (status == INPUT_CANCELLED)
+    {
+        print_cancel_message();
+        return 1;
+    }
+
+    if (status == INPUT_EXIT)
+    {
+        request_exit();
+        return 1;
+    }
+
+    if (status == INPUT_BACK)
     {
         print_cancel_message();
         return 1;
@@ -62,7 +118,78 @@ static int handle_prompt_result(int status, const char *error_message)
     return 0;
 }
 
-#ifndef UNIT_TEST
+static void request_exit(void)
+{
+    exit_requested = 1;
+    interrupt_requested = 1;
+}
+
+static int exit_program(int status)
+{
+#if !defined(_WIN32) && !defined(UNIT_TEST)
+    restore_terminal_settings();
+#endif
+    clear_record_storage();
+    return status;
+}
+
+#if !defined(_WIN32) && !defined(UNIT_TEST)
+static void restore_terminal_settings(void)
+{
+    if (!terminal_configured)
+    {
+        return;
+    }
+
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &original_termios) == 0)
+    {
+        terminal_configured = 0;
+    }
+}
+
+static int configure_terminal_shortcuts(void)
+{
+    if (!isatty(STDIN_FILENO))
+    {
+        return 0;
+    }
+
+    if (terminal_configured)
+    {
+        return 0;
+    }
+
+    if (tcgetattr(STDIN_FILENO, &original_termios) != 0)
+    {
+        return -1;
+    }
+
+    struct termios modified = original_termios;
+#ifdef VEOL
+    modified.c_cc[VEOL] = 0x18; /* Ctrl+X behaves like Enter */
+#endif
+#ifdef VEOL2
+    modified.c_cc[VEOL2] = 0x1A; /* Ctrl+Z behaves like Enter */
+#endif
+#ifdef VSUSP
+#ifdef _POSIX_VDISABLE
+    modified.c_cc[VSUSP] = _POSIX_VDISABLE;
+#else
+    modified.c_cc[VSUSP] = 0;
+#endif
+#endif
+
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &modified) != 0)
+    {
+        return -1;
+    }
+
+    terminal_configured = 1;
+    atexit(restore_terminal_settings);
+    return 0;
+}
+#endif
+
 static int has_csv_extension(const char *name)
 {
     if (!name)
@@ -126,6 +253,279 @@ static int compare_csv_names(const void *lhs, const void *rhs)
     }
 
     return strcmp(*a, *b);
+}
+
+static int compare_records_by_schedule(const void *lhs, const void *rhs)
+{
+    if (!lhs || !rhs)
+    {
+        return 0;
+    }
+
+    int left_index = *(const int *)lhs;
+    int right_index = *(const int *)rhs;
+
+    if (left_index == right_index)
+    {
+        return 0;
+    }
+
+    const char *left_date = maintenanceDate[left_index];
+    const char *right_date = maintenanceDate[right_index];
+
+    int left_empty = (!left_date || left_date[0] == '\0');
+    int right_empty = (!right_date || right_date[0] == '\0');
+
+    if (left_empty && right_empty)
+    {
+        /* Fallback to name for consistent ordering */
+        int name_cmp = strcmp(machineName[left_index], machineName[right_index]);
+        if (name_cmp != 0)
+        {
+            return name_cmp;
+        }
+        return strcmp(machineID[left_index], machineID[right_index]);
+    }
+
+    if (left_empty)
+    {
+        return 1; /* empty dates go last */
+    }
+
+    if (right_empty)
+    {
+        return -1;
+    }
+
+    int cmp = strcmp(left_date, right_date);
+    if (cmp != 0)
+    {
+        return cmp;
+    }
+
+    /* Same date: order by machine name, then by ID */
+    cmp = strcmp(machineName[left_index], machineName[right_index]);
+    if (cmp != 0)
+    {
+        return cmp;
+    }
+
+    return strcmp(machineID[left_index], machineID[right_index]);
+}
+
+static int string_contains_case_insensitive(const char *haystack, const char *needle)
+{
+    if (!haystack || !needle)
+    {
+        return 0;
+    }
+
+    if (needle[0] == '\0')
+    {
+        return 1;
+    }
+
+    for (const char *h = haystack; *h; ++h)
+    {
+        size_t i = 0;
+        while (needle[i])
+        {
+            unsigned char hc = (unsigned char)h[i];
+            if (hc == '\0')
+            {
+                break;
+            }
+
+            unsigned char nc = (unsigned char)needle[i];
+            if (tolower(hc) != tolower(nc))
+            {
+                break;
+            }
+            i++;
+        }
+
+        if (needle[i] == '\0')
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int parse_machine_id_value(const char *id, int *out_value)
+{
+    if (!id || !out_value || id[0] == '\0')
+    {
+        return -1;
+    }
+
+    errno = 0;
+    char *endptr = NULL;
+    long value = strtol(id, &endptr, 10);
+    if (errno != 0 || endptr == id || (endptr && *endptr != '\0') || value < 1 || value > INT_MAX)
+    {
+        return -1;
+    }
+
+    *out_value = (int)value;
+    return 0;
+}
+
+static int normalize_machine_id_value(int value, char *buffer, size_t size)
+{
+    if (value < 1 || !buffer || size == 0)
+    {
+        return -1;
+    }
+
+    int written = snprintf(buffer, size, "%d", value);
+    if (written < 0 || (size_t)written >= size)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int is_machine_id_unique(const char *id)
+{
+    if (!id)
+    {
+        return 0;
+    }
+
+    for (int i = 0; i < record_count; ++i)
+    {
+        if (strcmp(machineID[i], id) == 0)
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int find_smallest_available_machine_id(void)
+{
+    int limit = record_count + 1;
+    if (limit < 1)
+    {
+        limit = 1;
+    }
+
+    /* Track usage for IDs within a reasonable bound. */
+    char used[MAX_RECORDS + 2] = {0};
+
+    for (int i = 0; i < record_count; ++i)
+    {
+        int value = 0;
+        if (parse_machine_id_value(machineID[i], &value) == 0 && value >= 1 && value <= limit)
+        {
+            used[value] = 1;
+        }
+    }
+
+    for (int candidate = 1; candidate <= limit; ++candidate)
+    {
+        if (!used[candidate])
+        {
+            return candidate;
+        }
+    }
+
+    return limit + 1;
+}
+
+static int prompt_machine_id(char *buffer, size_t size)
+{
+    if (!buffer || size == 0)
+    {
+        return INPUT_ERROR;
+    }
+
+    while (1)
+    {
+        int next_id = find_smallest_available_machine_id();
+        if (buffer[0] != '\0')
+        {
+            printf("Current machine ID: %s\n", buffer);
+        }
+
+        char prompt[128];
+        snprintf(prompt, sizeof(prompt),
+                 "Enter machine ID (leave blank for auto %d): ",
+                 next_id);
+
+        char input[MAX_ID];
+        int status = safe_input(input, sizeof(input), prompt);
+        if (status == INPUT_EXIT || status == INPUT_CANCELLED || status == INPUT_BACK || status == INPUT_ERROR)
+        {
+            return status;
+        }
+
+        if (status == INPUT_TOO_LONG)
+        {
+            continue;
+        }
+
+        if (input[0] == '\0')
+        {
+            char normalized[MAX_ID];
+            if (normalize_machine_id_value(next_id, normalized, sizeof(normalized)) != 0)
+            {
+                printf("Failed to assign machine ID automatically.\n");
+                return INPUT_ERROR;
+            }
+
+            if (!is_machine_id_unique(normalized))
+            {
+                /* In theory this should not happen, but guard anyway. */
+                printf("Automatically generated machine ID '%s' is already in use.\n", normalized);
+                continue;
+            }
+
+            int written = snprintf(buffer, size, "%s", normalized);
+            if (written < 0 || (size_t)written >= size)
+            {
+                printf("Failed to store machine ID.\n");
+                return INPUT_ERROR;
+            }
+
+            printf("Assigned machine ID: %s\n", buffer);
+            return INPUT_OK;
+        }
+
+        int value = 0;
+        if (parse_machine_id_value(input, &value) != 0)
+        {
+            printf("Machine ID must be a positive whole number.\n");
+            continue;
+        }
+
+        char normalized[MAX_ID];
+        if (normalize_machine_id_value(value, normalized, sizeof(normalized)) != 0)
+        {
+            printf("Machine ID is invalid or too large.\n");
+            continue;
+        }
+
+        if (!is_machine_id_unique(normalized))
+        {
+            printf("Machine ID '%s' already exists.\n", normalized);
+            continue;
+        }
+
+        int written = snprintf(buffer, size, "%s", normalized);
+        if (written < 0 || (size_t)written >= size)
+        {
+            printf("Failed to store machine ID.\n");
+            return INPUT_ERROR;
+        }
+
+        printf("Using machine ID: %s\n", buffer);
+        return INPUT_OK;
+    }
 }
 
 static int copy_csv_file(const char *source, const char *destination)
@@ -197,6 +597,15 @@ static int prompt_csv_index_selection(size_t csv_count, const char *prompt, int 
     while (1)
     {
         int status = safe_input(buffer, sizeof(buffer), prompt);
+        if (status == INPUT_EXIT)
+        {
+            return INPUT_EXIT;
+        }
+        if (status == INPUT_BACK)
+        {
+            print_cancel_message();
+            return INPUT_CANCELLED;
+        }
         if (status == INPUT_CANCELLED)
         {
             print_cancel_message();
@@ -242,7 +651,16 @@ static int read_csv_menu_choice(size_t csv_count, int *selected_index, char *com
 
     while (1)
     {
-        int status = safe_input(buffer, sizeof(buffer), "Select CSV option: ");
+        int status = safe_input(buffer, sizeof(buffer), "Select CSV option (Ctrl+X cancel, Ctrl+Z back): ");
+        if (status == INPUT_EXIT)
+        {
+            return INPUT_EXIT;
+        }
+        if (status == INPUT_BACK)
+        {
+            print_cancel_message();
+            return INPUT_CANCELLED;
+        }
         if (status == INPUT_CANCELLED)
         {
             print_cancel_message();
@@ -262,14 +680,21 @@ static int read_csv_menu_choice(size_t csv_count, int *selected_index, char *com
 
         if (buffer[0] == '\0')
         {
-            printf("Invalid choice. Enter a number or A/N/C/Q.\n");
+            if (csv_count > 0)
+            {
+                printf("Invalid choice. Enter a number between 1 and %zu or A/N/D/Q.\n", csv_count);
+            }
+            else
+            {
+                printf("Invalid choice. Enter A/N/Q.\n");
+            }
             continue;
         }
 
         if (isalpha((unsigned char)buffer[0]) && buffer[1] == '\0')
         {
             char c = (char)toupper((unsigned char)buffer[0]);
-            if (c == 'A' || c == 'N' || c == 'C' || c == 'Q')
+            if (c == 'A' || c == 'N' || c == 'D' || c == 'Q')
             {
                 *command = c;
                 if (selected_index)
@@ -294,11 +719,11 @@ static int read_csv_menu_choice(size_t csv_count, int *selected_index, char *com
 
         if (csv_count > 0)
         {
-            printf("Invalid choice. Enter a number between 1 and %zu or A/N/C/Q.\n", csv_count);
+            printf("Invalid choice. Enter a number between 1 and %zu or A/N/D/Q.\n", csv_count);
         }
         else
         {
-            printf("Invalid choice. Enter A/N/C/Q.\n");
+            printf("Invalid choice. Enter A/N/Q.\n");
         }
     }
 }
@@ -371,27 +796,44 @@ static int show_csv_control_menu(void)
     }
 
     const char *current_path = maintenance_get_csv_path();
-    printf("\nCSV File Management\n");
-    for (size_t i = 0; i < csv_count; ++i)
+    const char *display_path = (current_path && current_path[0] != '\0') ? current_path : "default";
+    printf("\nCSV File Management\n\n");
+    printf("CSV current path: %s\n\n", display_path);
+
+    if (csv_count > 0)
     {
-        printf("%zu. %s\n", i + 1, csv_files[i]);
+        for (size_t i = 0; i < csv_count; ++i)
+        {
+            printf("%zu. %s\n", i + 1, csv_files[i]);
+        }
+        printf("\n");
+    }
+    else
+    {
+        printf("(No CSV files detected in current directory)\n\n");
     }
 
+    printf("Other\n");
     printf("A. Enter CSV file path manually\n");
     printf("N. Create a new blank CSV file\n");
     if (csv_count > 0)
     {
-        printf("C. Copy an existing CSV file\n");
+        printf("D. Duplicate an existing CSV file\n");
     }
-    printf("Q. Keep current CSV (%s)\n", current_path && current_path[0] != '\0' ? current_path : "default");
+    printf("Q. Exit\n");
 
     int result = 1;
 
-    while (!interrupt_requested)
+    while (!exit_requested && !interrupt_requested)
     {
         int selected_index = -1;
         char command = '\0';
         int status = read_csv_menu_choice(csv_count, &selected_index, &command);
+        if (status == INPUT_EXIT)
+        {
+            result = -1;
+            break;
+        }
         if (status == INPUT_CANCELLED)
         {
             break;
@@ -419,6 +861,16 @@ static int show_csv_control_menu(void)
         {
             char path_buffer[CSV_PATH_MAX];
             int input_status = safe_input(path_buffer, sizeof(path_buffer), "Enter CSV file path: ");
+            if (input_status == INPUT_EXIT)
+            {
+                result = -1;
+                break;
+            }
+            if (input_status == INPUT_BACK)
+            {
+                print_cancel_message();
+                break;
+            }
             if (input_status == INPUT_CANCELLED)
             {
                 print_cancel_message();
@@ -452,6 +904,16 @@ static int show_csv_control_menu(void)
         {
             char filename[CSV_PATH_MAX];
             int input_status = safe_input(filename, sizeof(filename), "Enter name for new CSV file: ");
+            if (input_status == INPUT_EXIT)
+            {
+                result = -1;
+                break;
+            }
+            if (input_status == INPUT_BACK)
+            {
+                print_cancel_message();
+                break;
+            }
             if (input_status == INPUT_CANCELLED)
             {
                 print_cancel_message();
@@ -488,16 +950,21 @@ static int show_csv_control_menu(void)
             result = 0;
             break;
         }
-        else if (command == 'C')
+        else if (command == 'D')
         {
             if (csv_count == 0)
             {
-                printf("No CSV files available to copy.\n");
+                printf("No CSV files available to duplicate.\n");
                 continue;
             }
 
             int source_index = -1;
-            int index_status = prompt_csv_index_selection(csv_count, "Enter the number of the CSV to copy: ", &source_index);
+            int index_status = prompt_csv_index_selection(csv_count, "Enter the number of the CSV to duplicate (Ctrl+X cancel, Ctrl+Z back):", &source_index);
+            if (index_status == INPUT_EXIT)
+            {
+                result = -1;
+                break;
+            }
             if (index_status == INPUT_CANCELLED)
             {
                 break;
@@ -512,6 +979,16 @@ static int show_csv_control_menu(void)
 
             char destination[CSV_PATH_MAX];
             int dest_status = safe_input(destination, sizeof(destination), "Enter name for the new CSV file: ");
+            if (dest_status == INPUT_EXIT)
+            {
+                result = -1;
+                break;
+            }
+            if (dest_status == INPUT_BACK)
+            {
+                print_cancel_message();
+                break;
+            }
             if (dest_status == INPUT_CANCELLED)
             {
                 print_cancel_message();
@@ -533,7 +1010,7 @@ static int show_csv_control_menu(void)
 
             if (copy_csv_file(csv_files[source_index], destination) != 0)
             {
-                printf("Failed to copy '%s' to '%s'.\n", csv_files[source_index], destination);
+                printf("Failed to duplicate '%s' to '%s'.\n", csv_files[source_index], destination);
                 continue;
             }
 
@@ -543,21 +1020,14 @@ static int show_csv_control_menu(void)
                 continue;
             }
 
-            printf("Copied '%s' to '%s'.\n", csv_files[source_index], destination);
+            printf("Duplicated '%s' to '%s'.\n", csv_files[source_index], destination);
             reload_records_with_warning();
             result = 0;
             break;
         }
         else if (command == 'Q')
         {
-            if (current_path && current_path[0] != '\0')
-            {
-                printf("Keeping existing CSV file: %s\n", current_path);
-            }
-            else
-            {
-                printf("Keeping existing CSV file configuration.\n");
-            }
+            printf("Exiting CSV menu.\n");
             result = 1;
             break;
         }
@@ -569,6 +1039,11 @@ static int show_csv_control_menu(void)
     }
     free(csv_files);
 
+    if (exit_requested)
+    {
+        return -1;
+    }
+
     if (interrupt_requested)
     {
         return -1;
@@ -577,7 +1052,156 @@ static int show_csv_control_menu(void)
     return result;
 }
 
-#endif /* UNIT_TEST */
+static void handle_addon_menu(void)
+{
+    while (!exit_requested && !interrupt_requested)
+    {
+        display_addon_menu();
+        int choice = read_addon_choice();
+        if (choice < 0)
+        {
+            return;
+        }
+
+        if (choice == 0 || choice == 2)
+        {
+            return;
+        }
+
+        if (choice == 1)
+        {
+            resequence_machine_ids();
+        }
+    }
+}
+
+static void display_addon_menu(void)
+{
+    printf("\nAdd-on Tools\n");
+    printf("1. Resequence machine IDs by maintenance date\n");
+    printf("2. Return to Machine Maintenance Manager\n");
+}
+
+static int read_addon_choice(void)
+{
+    char buffer[16];
+
+    while (1)
+    {
+        int status = safe_input(buffer, sizeof(buffer), "Select add-on option (Ctrl+X cancel, Ctrl+Z back): ");
+        if (status == INPUT_EXIT)
+        {
+            return -1;
+        }
+
+        if (status == INPUT_BACK || status == INPUT_CANCELLED)
+        {
+            print_cancel_message();
+            return 0;
+        }
+
+        if (status == INPUT_ERROR)
+        {
+            printf("Input error detected. Returning to main menu.\n");
+            return -1;
+        }
+
+        if (status == INPUT_TOO_LONG)
+        {
+            continue;
+        }
+
+        if (buffer[0] == '\0')
+        {
+            printf("Invalid choice. Enter 1 or 2.\n");
+            continue;
+        }
+
+        char *endptr = NULL;
+        long value = strtol(buffer, &endptr, 10);
+        if (endptr && *endptr == '\0' && value >= 1 && value <= 2)
+        {
+            return (int)value;
+        }
+
+        printf("Invalid choice. Enter 1 or 2.\n");
+    }
+}
+
+static void resequence_machine_ids(void)
+{
+    if (record_count <= 0)
+    {
+        printf("No maintenance records available to resequence.\n");
+        return;
+    }
+
+    int indices[MAX_RECORDS];
+    for (int i = 0; i < record_count; ++i)
+    {
+        indices[i] = i;
+    }
+
+    qsort(indices, record_count, sizeof(int), compare_records_by_schedule);
+
+    char new_names[MAX_RECORDS][MAX_NAME];
+    char new_dates[MAX_RECORDS][MAX_DATE];
+    char new_details[MAX_RECORDS][MAX_DETAILS];
+
+    for (int pos = 0; pos < record_count; ++pos)
+    {
+        int src = indices[pos];
+        snprintf(new_names[pos], MAX_NAME, "%s", machineName[src]);
+        snprintf(new_dates[pos], MAX_DATE, "%s", maintenanceDate[src]);
+        snprintf(new_details[pos], MAX_DETAILS, "%s", maintenanceDetails[src]);
+    }
+
+    for (int i = 0; i < record_count; ++i)
+    {
+        snprintf(machineName[i], MAX_NAME, "%s", new_names[i]);
+        snprintf(maintenanceDate[i], MAX_DATE, "%s", new_dates[i]);
+        snprintf(maintenanceDetails[i], MAX_DETAILS, "%s", new_details[i]);
+
+        int written = snprintf(machineID[i], MAX_ID, "%d", i + 1);
+        if (written < 0 || written >= MAX_ID)
+        {
+            printf("Warning: Failed to assign machine ID for record %d.\n", i + 1);
+        }
+    }
+
+    if (save_all_records() == 0)
+    {
+        if (reload_records_with_warning() == 0)
+        {
+            printf("Resequenced machine IDs by maintenance date and saved changes.\n");
+        }
+    }
+    else
+    {
+        printf("Resequenced machine IDs in memory, but saving the file failed.\n");
+    }
+}
+
+static void print_record_table_header(void)
+{
+    printf("+----------------------+--------------+--------------+--------------------------------+\n");
+    printf("| Machine Name         | Machine ID   | Date         | Details                        |\n");
+    printf("+----------------------+--------------+--------------+--------------------------------+\n");
+}
+
+static void print_record_table_row(int index)
+{
+    printf("| %-20.20s | %-12.12s | %-12.12s | %-30.30s |\n",
+           machineName[index],
+           machineID[index],
+           maintenanceDate[index],
+           maintenanceDetails[index]);
+}
+
+static void print_record_table_footer(void)
+{
+    printf("+----------------------+--------------+--------------+--------------------------------+\n");
+}
 
 int reload_records_with_warning(void)
 {
@@ -630,49 +1254,76 @@ int read_menu_choice(void);
 
 int main(void)
 {
-    int choice;
+    int choice = 0;
 
-    signal(SIGINT, handle_sigint);
+#if !defined(_WIN32)
+    if (configure_terminal_shortcuts() != 0)
+    {
+        fprintf(stderr, "Warning: Unable to enable Ctrl+X shortcut.\n");
+    }
+#endif
+
+#ifdef _WIN32
+    if (signal(SIGINT, handle_sigint) == SIG_ERR)
+    {
+        perror("Configure SIGINT handler");
+        return exit_program(1);
+    }
+#else
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = handle_sigint;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    if (sigaction(SIGINT, &sa, NULL) != 0)
+    {
+        perror("Configure SIGINT handler");
+        return exit_program(1);
+    }
+#endif
 
     int csv_menu_status = show_csv_control_menu();
+    if (exit_requested || interrupt_requested)
+    {
+        printf("\nHotkey detected. Cleaning up and exiting...\n");
+        return exit_program(0);
+    }
+
     if (csv_menu_status < 0)
     {
-        return 1;
+        return exit_program(1);
     }
 
-    if (interrupt_requested)
+    int ensure_status = ensure_csv_exists();
+    if (exit_requested || interrupt_requested)
     {
-        clear_record_storage();
-        printf("\nCtrl+C detected. Cleared maintenance data from memory before exiting.\n");
-        return 1;
+        printf("\nHotkey detected. Cleaning up and exiting...\n");
+        return exit_program(0);
     }
 
-    if (ensure_csv_exists() != 0)
-        return 1;
+    if (ensure_status != 0)
+    {
+        return exit_program(1);
+    }
 
-    // Load records once at startup
     if (load_records() != 0)
     {
         printf("Failed to load records.\n");
-        return 1;
+        return exit_program(1);
     }
 
     do
     {
-        if (interrupt_requested)
+        if (exit_requested || interrupt_requested)
         {
-            clear_record_storage();
-            printf("\nCtrl+C detected. Cleared maintenance data from memory before exiting.\n");
             break;
         }
 
         display_menu();
         choice = read_menu_choice();
 
-        if (interrupt_requested)
+        if (exit_requested || interrupt_requested)
         {
-            clear_record_storage();
-            printf("\nCtrl+C detected. Cleared maintenance data from memory before exiting.\n");
             break;
         }
 
@@ -683,7 +1334,7 @@ int main(void)
             break;
         case 2:
             add_record();
-            if (save_all_records() == 0)
+            if (!exit_requested && !interrupt_requested && save_all_records() == 0)
             {
                 reload_records_with_warning();
             }
@@ -693,31 +1344,39 @@ int main(void)
             break;
         case 4:
             update_record();
-            if (save_all_records() == 0)
+            if (!exit_requested && !interrupt_requested && save_all_records() == 0)
             {
                 reload_records_with_warning();
             }
             break;
         case 5:
             delete_record();
-            if (save_all_records() == 0)
+            if (!exit_requested && !interrupt_requested && save_all_records() == 0)
             {
                 reload_records_with_warning();
             }
             break;
         case 6:
-            clear_console();
+            handle_addon_menu();
             break;
         case 7:
-            clear_record_storage();
+            run_test_program();
+            break;
+        case 8:
             printf("Exiting...\n");
+            exit_requested = 1;
             break;
         default:
             printf("Invalid choice. Please try again.\n");
         }
-    } while (choice != 7);
+    } while (!exit_requested && choice != 8);
 
-    return 0;
+    if (exit_requested && interrupt_requested)
+    {
+        printf("\nCtrl+C detected. Cleaning up and exiting...\n");
+    }
+
+    return exit_program(0);
 }
 #endif /* UNIT_TEST */
 
@@ -730,8 +1389,9 @@ void display_menu(void)
     printf("3. Search record\n");
     printf("4. Update record\n");
     printf("5. Delete record\n");
-    printf("6. Clear console\n");
-    printf("7. Exit\n");
+    printf("6. Add-on tools\n");
+    printf("7. Test program\n");
+    printf("8. Exit\n");
 }
 #endif
 
@@ -792,12 +1452,22 @@ int ensure_csv_exists(void)
 static int prompt_copy_from_sample(void)
 {
     char prompt[128];
-    snprintf(prompt, sizeof(prompt), "Copy sample data from %s? (y/n): ", SAMPLE_CSV_FILE);
+    snprintf(prompt, sizeof(prompt), "Copy sample data from %s? (y/n, Ctrl+X cancel, Ctrl+Z back): ", SAMPLE_CSV_FILE);
 
     while (1)
     {
         char response[8];
         int status = safe_input(response, sizeof(response), prompt);
+
+        if (status == INPUT_EXIT)
+        {
+            return INPUT_EXIT;
+        }
+
+        if (status == INPUT_BACK)
+        {
+            return INPUT_CANCELLED;
+        }
 
         if (status == INPUT_CANCELLED)
         {
@@ -1003,13 +1673,89 @@ void display_records(void)
         return;
     }
 
-    printf("\n%-20s %-12s %-12s %-30s\n", "Machine Name", "Machine ID", "Date", "Details");
-    printf("-------------------------------------------------------------------------------\n");
+    printf("\n");
+    print_record_table_header();
     for (int i = 0; i < record_count; ++i)
     {
-        printf("%-20s %-12s %-12s %-30s\n",
-               machineName[i], machineID[i], maintenanceDate[i], maintenanceDetails[i]);
+        print_record_table_row(i);
     }
+    print_record_table_footer();
+}
+
+static record_result_t add_record_direct(const char *name, const char *id,
+                                         const char *date, const char *details)
+{
+    if (is_record_storage_full())
+    {
+        return RECORD_ERROR_STORAGE_FULL;
+    }
+
+    if (!name || !id || !date || !details)
+    {
+        return RECORD_ERROR_INVALID_DATA;
+    }
+
+    if (!is_valid_machine_name(name) || !is_valid_machine_id(id) ||
+        !is_valid_date(date) || !is_valid_details(details))
+    {
+        return RECORD_ERROR_INVALID_DATA;
+    }
+
+    if (!is_machine_id_unique(id))
+    {
+        return RECORD_ERROR_DUPLICATE_ID;
+    }
+
+    int written_name = snprintf(machineName[record_count], MAX_NAME, "%s", name);
+    int written_id = snprintf(machineID[record_count], MAX_ID, "%s", id);
+    int written_date = snprintf(maintenanceDate[record_count], MAX_DATE, "%s", date);
+    int written_details = snprintf(maintenanceDetails[record_count], MAX_DETAILS, "%s", details);
+
+    if (written_name < 0 || written_id < 0 || written_date < 0 || written_details < 0 ||
+        written_name >= MAX_NAME || written_id >= MAX_ID ||
+        written_date >= MAX_DATE || written_details >= MAX_DETAILS)
+    {
+        return RECORD_ERROR_INVALID_DATA;
+    }
+
+    record_count++;
+    return RECORD_SUCCESS;
+}
+
+static record_result_t delete_record_direct(const char *id)
+{
+    if (!is_valid_machine_id(id))
+    {
+        return RECORD_ERROR_INVALID_DATA;
+    }
+
+    for (int i = 0; i < record_count; ++i)
+    {
+        if (strcmp(machineID[i], id) == 0)
+        {
+            for (int j = i; j < record_count - 1; ++j)
+            {
+                memmove(machineName[j], machineName[j + 1], sizeof(machineName[j]));
+                memmove(machineID[j], machineID[j + 1], sizeof(machineID[j]));
+                memmove(maintenanceDate[j], maintenanceDate[j + 1], sizeof(maintenanceDate[j]));
+                memmove(maintenanceDetails[j], maintenanceDetails[j + 1], sizeof(maintenanceDetails[j]));
+            }
+
+            if (record_count > 0)
+            {
+                int last = record_count - 1;
+                memset(machineName[last], 0, sizeof(machineName[last]));
+                memset(machineID[last], 0, sizeof(machineID[last]));
+                memset(maintenanceDate[last], 0, sizeof(maintenanceDate[last]));
+                memset(maintenanceDetails[last], 0, sizeof(maintenanceDetails[last]));
+            }
+
+            record_count--;
+            return RECORD_SUCCESS;
+        }
+    }
+
+    return RECORD_ERROR_NOT_FOUND;
 }
 
 void add_record(void)
@@ -1020,56 +1766,79 @@ void add_record(void)
         return;
     }
 
-    char n[MAX_NAME], id[MAX_ID], d[MAX_DATE], det[MAX_DETAILS];
+    char name[MAX_NAME] = "";
+    char id[MAX_ID] = "";
+    char date[MAX_DATE] = "";
+    char details[MAX_DETAILS] = "";
 
-    int status = prompt_with_validation(n, MAX_NAME, "Enter machine name: ",
-                                        is_valid_machine_name,
-                                        "Machine name must be printable text without commas or quotes.");
-    if (handle_prompt_result(status, "Error reading machine name."))
-    {
-        return;
-    }
+    const char *error_messages[] = {
+        "Error reading machine name.",
+        "Error assigning machine ID.",
+        "Error reading maintenance date.",
+        "Error reading maintenance details."};
 
-    status = prompt_with_validation(id, MAX_ID, "Enter machine ID: ",
-                                    is_valid_machine_id,
-                                    "Machine ID must use letters, numbers, dashes, underscores or dots only.");
-    if (handle_prompt_result(status, "Error reading machine ID."))
+    int step = 0;
+    while (step < 4)
     {
-        return;
-    }
+        int status = INPUT_ERROR;
 
-    for (int i = 0; i < record_count; ++i)
-    {
-        if (strcmp(machineID[i], id) == 0)
+        switch (step)
         {
-            printf("Machine ID '%s' already exists.\n", id);
+        case 0:
+            status = prompt_with_validation(name, MAX_NAME, "Enter machine name: ",
+                                            is_valid_machine_name,
+                                            "Machine name must be printable text without commas or quotes.");
+            break;
+        case 1:
+            status = prompt_machine_id(id, sizeof(id));
+            break;
+        case 2:
+            status = prompt_with_validation(date, MAX_DATE, "Enter maintenance date (YYYY-MM-DD): ",
+                                            is_valid_date,
+                                            "Date must follow YYYY-MM-DD with a real calendar day.");
+            break;
+        case 3:
+            status = prompt_with_validation(details, MAX_DETAILS, "Enter maintenance details: ",
+                                            is_valid_details,
+                                            "Details must not be empty, contain commas or quotes.");
+            break;
+        default:
+            status = INPUT_ERROR;
+        }
+
+        if (status == INPUT_OK)
+        {
+            step++;
+            continue;
+        }
+
+        if (status == INPUT_BACK)
+        {
+            if (step == 0)
+            {
+                print_cancel_message();
+                return;
+            }
+
+            --step;
+            continue;
+        }
+
+        if (handle_prompt_result(status, error_messages[step]))
+        {
             return;
         }
     }
 
-    status = prompt_with_validation(d, MAX_DATE, "Enter maintenance date (YYYY-MM-DD): ",
-                                    is_valid_date,
-                                    "Date must follow YYYY-MM-DD with a real calendar day.");
-    if (handle_prompt_result(status, "Error reading maintenance date."))
+    record_result_t insert_status = add_record_direct(name, id, date, details);
+    if (insert_status == RECORD_SUCCESS)
     {
-        return;
+        printf("Record added with ID %s.\n", id);
     }
-
-    status = prompt_with_validation(det, MAX_DETAILS, "Enter maintenance details: ",
-                                    is_valid_details,
-                                    "Details must not be empty, contain commas or quotes.");
-    if (handle_prompt_result(status, "Error reading maintenance details."))
+    else
     {
-        return;
+        printf("Failed to add record.\n");
     }
-
-    snprintf(machineName[record_count], MAX_NAME, "%s", n);
-    snprintf(machineID[record_count], MAX_ID, "%s", id);
-    snprintf(maintenanceDate[record_count], MAX_DATE, "%s", d);
-    snprintf(maintenanceDetails[record_count], MAX_DETAILS, "%s", det);
-
-    record_count++;
-    printf("Record added.\n");
 }
 
 void search_records(void)
@@ -1085,23 +1854,31 @@ void search_records(void)
         return;
     }
 
-    printf("\nSearch Results:\n");
-    printf("%-20s %-12s %-12s %-30s\n", "Machine Name", "Machine ID", "Date", "Details");
-    printf("-------------------------------------------------------------------------------\n");
-
+    int header_printed = 0;
     for (int i = 0; i < record_count; ++i)
     {
-        if (strstr(machineName[i], q) != NULL || strstr(machineID[i], q) != NULL)
+        if (string_contains_case_insensitive(machineName[i], q) ||
+            string_contains_case_insensitive(machineID[i], q))
         {
-            printf("%-20s %-12s %-12s %-30s\n",
-                   machineName[i], machineID[i], maintenanceDate[i], maintenanceDetails[i]);
+            if (!header_printed)
+            {
+                printf("\nSearch Results:\n");
+                print_record_table_header();
+                header_printed = 1;
+            }
+            print_record_table_row(i);
             found++;
         }
     }
-    if (found == 0)
+    if (!header_printed)
+    {
         printf("No records found for '%s'.\n", q);
+    }
     else
+    {
+        print_record_table_footer();
         printf("\nTotal %d record(s).\n", found);
+    }
 }
 
 void update_record(void)
@@ -1110,7 +1887,7 @@ void update_record(void)
 
     int status = prompt_with_validation(id, MAX_ID, "Enter machine ID to update: ",
                                         is_valid_machine_id,
-                                        "Machine ID must use letters, numbers, dashes, underscores or dots only.");
+                                        "Machine ID must be a positive whole number.");
     if (handle_prompt_result(status, "Error reading machine ID."))
     {
         return;
@@ -1128,34 +1905,77 @@ void update_record(void)
             snprintf(new_date, sizeof(new_date), "%s", maintenanceDate[i]);
             snprintf(new_details, sizeof(new_details), "%s", maintenanceDetails[i]);
 
-            printf("Current Name: %s\n", machineName[i]);
-            status = prompt_optional_update("New name (leave blank to keep): ",
-                                             new_name, MAX_NAME,
-                                             is_valid_machine_name,
-                                             "Machine name must be printable text without commas or quotes.");
-            if (status != INPUT_OK && handle_prompt_result(status, "Error updating machine name."))
+            int step = 0;
+            while (step < 3)
             {
-                return;
-            }
+                const char *error_message = NULL;
+                int prompt_status = INPUT_OK;
 
-            printf("Current Date: %s\n", maintenanceDate[i]);
-            status = prompt_optional_update("New date YYYY-MM-DD (leave blank to keep): ",
-                                             new_date, MAX_DATE,
-                                             is_valid_date,
-                                             "Date must follow YYYY-MM-DD with a real calendar day.");
-            if (status != INPUT_OK && handle_prompt_result(status, "Error updating maintenance date."))
-            {
-                return;
-            }
+                switch (step)
+                {
+                case 0:
+                    printf("Current Name: %s\n", machineName[i]);
+                    if (strcmp(new_name, machineName[i]) != 0)
+                    {
+                        printf("Staged Name: %s\n", new_name);
+                    }
+                    error_message = "Error updating machine name.";
+                    prompt_status = prompt_optional_update("New name (leave blank to keep): ",
+                                                           new_name, MAX_NAME,
+                                                           is_valid_machine_name,
+                                                           "Machine name must be printable text without commas or quotes.");
+                    break;
+                case 1:
+                    printf("Current Date: %s\n", maintenanceDate[i]);
+                    if (strcmp(new_date, maintenanceDate[i]) != 0)
+                    {
+                        printf("Staged Date: %s\n", new_date);
+                    }
+                    error_message = "Error updating maintenance date.";
+                    prompt_status = prompt_optional_update("New date YYYY-MM-DD (leave blank to keep): ",
+                                                           new_date, MAX_DATE,
+                                                           is_valid_date,
+                                                           "Date must follow YYYY-MM-DD with a real calendar day.");
+                    break;
+                case 2:
+                    printf("Current Details: %s\n", maintenanceDetails[i]);
+                    if (strcmp(new_details, maintenanceDetails[i]) != 0)
+                    {
+                        printf("Staged Details: %s\n", new_details);
+                    }
+                    error_message = "Error updating maintenance details.";
+                    prompt_status = prompt_optional_update("New details (leave blank to keep): ",
+                                                           new_details, MAX_DETAILS,
+                                                           is_valid_details,
+                                                           "Details must not be empty, contain commas or quotes.");
+                    break;
+                default:
+                    prompt_status = INPUT_ERROR;
+                    error_message = "Unexpected update step.";
+                }
 
-            printf("Current Details: %s\n", maintenanceDetails[i]);
-            status = prompt_optional_update("New details (leave blank to keep): ",
-                                             new_details, MAX_DETAILS,
-                                             is_valid_details,
-                                             "Details must not be empty, contain commas or quotes.");
-            if (status != INPUT_OK && handle_prompt_result(status, "Error updating maintenance details."))
-            {
-                return;
+                if (prompt_status == INPUT_OK)
+                {
+                    step++;
+                    continue;
+                }
+
+                if (prompt_status == INPUT_BACK)
+                {
+                    if (step == 0)
+                    {
+                        print_cancel_message();
+                        return;
+                    }
+
+                    step--;
+                    continue;
+                }
+
+                if (handle_prompt_result(prompt_status, error_message))
+                {
+                    return;
+                }
             }
 
             snprintf(machineName[i], MAX_NAME, "%s", new_name);
@@ -1172,32 +1992,182 @@ void update_record(void)
 void delete_record(void)
 {
     char id[MAX_ID];
-    
+
     int status = prompt_with_validation(id, MAX_ID, "Enter machine ID to delete: ",
                                         is_valid_machine_id,
-                                        "Machine ID must use letters, numbers, dashes, underscores or dots only.");
+                                        "Machine ID must be a positive whole number.");
     if (handle_prompt_result(status, "Error reading machine ID."))
     {
         return;
     }
 
-    for (int i = 0; i < record_count; ++i)
+    record_result_t delete_status = delete_record_direct(id);
+    if (delete_status == RECORD_SUCCESS)
     {
-        if (strcmp(machineID[i], id) == 0)
-        {
-            for (int j = i; j < record_count - 1; ++j)
-            {
-                memmove(machineName[j], machineName[j + 1], sizeof(machineName[j]));
-                memmove(machineID[j], machineID[j + 1], sizeof(machineID[j]));
-                memmove(maintenanceDate[j], maintenanceDate[j + 1], sizeof(maintenanceDate[j]));
-                memmove(maintenanceDetails[j], maintenanceDetails[j + 1], sizeof(maintenanceDetails[j]));
-            }
-            record_count--;
-            printf("Record deleted.\n");
-            return;
-        }
+        printf("Record deleted.\n");
+        return;
     }
-    printf("No record with Machine ID '%s'.\n", id);
+
+    if (delete_status == RECORD_ERROR_NOT_FOUND)
+    {
+        printf("No record with Machine ID '%s'.\n", id);
+        return;
+    }
+
+    printf("Unable to delete record.\n");
+}
+
+typedef struct test_stats
+{
+    int total;
+    int failed;
+} test_stats_t;
+
+static void test_assert(test_stats_t *stats, int condition, const char *message)
+{
+    if (!stats || !message)
+    {
+        return;
+    }
+
+    stats->total++;
+    if (condition)
+    {
+        printf("   [PASS] %s\n", message);
+    }
+    else
+    {
+        stats->failed++;
+        printf("   [FAIL] %s\n", message);
+    }
+}
+
+static void print_test_section_header(const char *title)
+{
+    printf("\n=== %s ===\n", title);
+}
+
+static void run_unit_test_add_machine(test_stats_t *stats)
+{
+    print_test_section_header("Unit Test: add_machine");
+
+    clear_record_storage();
+
+    record_result_t status = add_record_direct("Unit Test Rig", "1", "2025-01-15", "Initial calibration");
+    test_assert(stats, status == RECORD_SUCCESS, "add_record_direct returns success");
+    test_assert(stats, record_count == 1, "Record count increments to 1");
+    test_assert(stats, strcmp(machineName[0], "Unit Test Rig") == 0, "Machine name stored correctly");
+    test_assert(stats, strcmp(machineID[0], "1") == 0, "Machine ID stored correctly");
+    test_assert(stats, strcmp(maintenanceDate[0], "2025-01-15") == 0, "Maintenance date stored correctly");
+    test_assert(stats, strcmp(maintenanceDetails[0], "Initial calibration") == 0,
+                "Maintenance details stored correctly");
+
+    record_result_t duplicate = add_record_direct("Duplicate", "1", "2025-02-01", "Should fail");
+    test_assert(stats, duplicate == RECORD_ERROR_DUPLICATE_ID, "Duplicate machine ID is rejected");
+}
+
+static void run_unit_test_delete_machine(test_stats_t *stats)
+{
+    print_test_section_header("Unit Test: delete_machine");
+
+    clear_record_storage();
+
+    test_assert(stats, add_record_direct("Lathe", "10", "2025-03-10", "Lubricated gears") == RECORD_SUCCESS,
+                "Seed record 1");
+    test_assert(stats, add_record_direct("Drill Press", "11", "2025-03-11", "Adjusted spindle") == RECORD_SUCCESS,
+                "Seed record 2");
+
+    record_result_t delete_status = delete_record_direct("10");
+    test_assert(stats, delete_status == RECORD_SUCCESS, "delete_record_direct removes existing machine");
+    test_assert(stats, record_count == 1, "Record count decremented to 1");
+    test_assert(stats, strcmp(machineID[0], "11") == 0, "Remaining record shifted correctly");
+
+    record_result_t missing_delete = delete_record_direct("999");
+    test_assert(stats, missing_delete == RECORD_ERROR_NOT_FOUND, "Deleting unknown machine ID returns not found");
+}
+
+static void run_unit_tests(void)
+{
+    test_stats_t stats = {0, 0};
+
+    run_unit_test_add_machine(&stats);
+    run_unit_test_delete_machine(&stats);
+
+    printf("\nUnit tests summary: %d passed, %d failed, %d total\n",
+           stats.total - stats.failed, stats.failed, stats.total);
+}
+
+static void run_end_to_end_test(test_stats_t *stats)
+{
+    print_test_section_header("End-to-End Test: workflow");
+
+    char original_path[CSV_PATH_MAX];
+    snprintf(original_path, sizeof(original_path), "%s", maintenance_get_csv_path());
+
+    const char *test_path = "tests/runtime_e2e.csv";
+    remove(test_path);
+
+    if (maintenance_set_csv_path(test_path) != 0)
+    {
+        test_assert(stats, 0, "Switch to test CSV path");
+        maintenance_set_csv_path(original_path);
+        return;
+    }
+
+    clear_record_storage();
+
+    test_assert(stats, add_record_direct("Hydraulic Press", "101", "2025-08-01",
+                                         "Changed hydraulic fluid") == RECORD_SUCCESS,
+                "Add first record");
+    test_assert(stats, add_record_direct("Laser Cutter", "202", "2025-08-05",
+                                         "Replaced air filter") == RECORD_SUCCESS,
+                "Add second record");
+
+    test_assert(stats, save_all_records() == 0, "Persist records to CSV");
+
+    clear_record_storage();
+    test_assert(stats, load_records() == 0, "Reload records from CSV");
+    test_assert(stats, record_count == 2, "Record count after reload is 2");
+    test_assert(stats, strcmp(machineName[0], "Hydraulic Press") == 0, "First record name matches");
+    test_assert(stats, strcmp(machineID[1], "202") == 0, "Second record ID matches");
+
+    test_assert(stats, delete_record_direct("101") == RECORD_SUCCESS, "Delete first record");
+    test_assert(stats, record_count == 1, "Record count after delete is 1");
+    test_assert(stats, strcmp(machineID[0], "202") == 0, "Remaining record has expected ID");
+
+    test_assert(stats, save_all_records() == 0, "Persist updated records");
+
+    clear_record_storage();
+    test_assert(stats, load_records() == 0, "Reload updated records");
+    test_assert(stats, record_count == 1, "Final record count is 1");
+    test_assert(stats, strcmp(machineName[0], "Laser Cutter") == 0, "Final record still correct");
+
+    remove(test_path);
+
+    clear_record_storage();
+    test_assert(stats, maintenance_set_csv_path(original_path) == 0, "Restore original CSV path");
+    test_assert(stats, load_records() == 0, "Reload original data");
+}
+
+static void run_end_to_end_tests(void)
+{
+    test_stats_t stats = {0, 0};
+    run_end_to_end_test(&stats);
+
+    printf("\nEnd-to-end summary: %d passed, %d failed, %d total\n",
+           stats.total - stats.failed, stats.failed, stats.total);
+}
+
+static void run_test_program(void)
+{
+    printf("\n==============================\n");
+    printf("Running built-in test program\n");
+    printf("==============================\n");
+
+    run_unit_tests();
+    run_end_to_end_tests();
+
+    printf("\nTest program finished.\n");
 }
 
 int safe_input(char *buffer, int size, const char *prompt)
@@ -1207,15 +2177,29 @@ int safe_input(char *buffer, int size, const char *prompt)
         return INPUT_ERROR;
     }
 
+    if (exit_requested || interrupt_requested)
+    {
+        if (buffer && size > 0)
+        {
+            buffer[0] = '\0';
+        }
+        return INPUT_EXIT;
+    }
+
     printf("%s", prompt);
     fflush(stdout);
     if (fgets(buffer, size, stdin) == NULL)
     {
+        if (exit_requested || interrupt_requested)
+        {
+            buffer[0] = '\0';
+            return INPUT_EXIT;
+        }
+
         return INPUT_ERROR;
     }
 
     int truncated = (strchr(buffer, '\n') == NULL);
-
     if (contains_cancel_signal(buffer))
     {
         if (truncated)
@@ -1224,6 +2208,16 @@ int safe_input(char *buffer, int size, const char *prompt)
         }
         buffer[0] = '\0';
         return INPUT_CANCELLED;
+    }
+
+    if (contains_back_signal(buffer))
+    {
+        if (truncated)
+        {
+            flush_line();
+        }
+        buffer[0] = '\0';
+        return INPUT_BACK;
     }
 
     sanitize_input(buffer);
@@ -1249,6 +2243,14 @@ int prompt_with_validation(char *buffer, int size, const char *prompt,
     while (1)
     {
         int status = safe_input(buffer, size, prompt);
+        if (status == INPUT_EXIT)
+        {
+            return INPUT_EXIT;
+        }
+        if (status == INPUT_BACK)
+        {
+            return INPUT_BACK;
+        }
         if (status == INPUT_CANCELLED)
         {
             return INPUT_CANCELLED;
@@ -1283,7 +2285,16 @@ int read_menu_choice(void)
 
     while (1)
     {
-        int status = safe_input(buffer, sizeof(buffer), "Enter your choice: ");
+        int status = safe_input(buffer, sizeof(buffer), "Enter your choice (Ctrl+X cancel, Ctrl+Z back): ");
+        if (status == INPUT_EXIT)
+        {
+            return 8;
+        }
+        if (status == INPUT_BACK)
+        {
+            print_cancel_message();
+            continue;
+        }
         if (status == INPUT_CANCELLED)
         {
             print_cancel_message();
@@ -1293,7 +2304,7 @@ int read_menu_choice(void)
         if (status == INPUT_ERROR)
         {
             printf("Input error detected. Exiting menu.\n");
-            return 7;
+            return 8;
         }
 
         if (status == INPUT_TOO_LONG)
@@ -1303,18 +2314,18 @@ int read_menu_choice(void)
 
         if (buffer[0] == '\0')
         {
-            printf("Invalid choice. Please enter a number between 1 and 7.\n");
+            printf("Invalid choice. Please enter a number between 1 and 8.\n");
             continue;
         }
 
         char *endptr = NULL;
         long value = strtol(buffer, &endptr, 10);
-        if (endptr != NULL && *endptr == '\0' && value >= 1 && value <= 7)
+        if (endptr != NULL && *endptr == '\0' && value >= 1 && value <= 8)
         {
             return (int)value;
         }
 
-        printf("Invalid choice. Please enter a number between 1 and 7.\n");
+        printf("Invalid choice. Please enter a number between 1 and 8.\n");
     }
 }
 #endif
@@ -1365,16 +2376,7 @@ static void clear_record_storage(void)
 static void handle_sigint(int signal)
 {
     (void)signal;
-    interrupt_requested = 1;
-}
-
-static void clear_console(void)
-{
-#ifdef _WIN32
-    system("cls");
-#else
-    system("clear");
-#endif
+    request_exit();
 }
 
 void sanitize_input(char *buffer)
@@ -1437,6 +2439,24 @@ int contains_cancel_signal(const char *str)
     return 0;
 }
 
+static int contains_back_signal(const char *str)
+{
+    if (!str)
+    {
+        return 0;
+    }
+
+    for (const unsigned char *p = (const unsigned char *)str; *p != '\0'; ++p)
+    {
+        if (*p == 0x1A)
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 int is_valid_machine_name(const char *str)
 {
     if (!is_non_empty(str) || contains_disallowed_csv_chars(str))
@@ -1456,19 +2476,8 @@ int is_valid_machine_name(const char *str)
 
 int is_valid_machine_id(const char *str)
 {
-    if (!is_non_empty(str) || contains_disallowed_csv_chars(str))
-    {
-        return 0;
-    }
-
-    for (const char *p = str; *p; ++p)
-    {
-        if (!(isalnum((unsigned char)*p) || *p == '-' || *p == '_' || *p == '.'))
-        {
-            return 0;
-        }
-    }
-    return 1;
+    int value = 0;
+    return parse_machine_id_value(str, &value) == 0;
 }
 
 int is_valid_date(const char *str)
@@ -1557,6 +2566,14 @@ int prompt_optional_update(const char *prompt, char *dest, int dest_size,
     while (1)
     {
         int status = safe_input(buffer, sizeof(buffer), prompt);
+        if (status == INPUT_EXIT)
+        {
+            return INPUT_EXIT;
+        }
+        if (status == INPUT_BACK)
+        {
+            return INPUT_BACK;
+        }
         if (status == INPUT_CANCELLED)
         {
             return INPUT_CANCELLED;
