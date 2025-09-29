@@ -1223,16 +1223,16 @@ static void resequence_machine_ids(void)
     for (int pos = 0; pos < record_count; ++pos)
     {
         int src = indices[pos];
-        snprintf(new_names[pos], MAX_NAME, "%s", machineName[src]);
-        snprintf(new_dates[pos], MAX_DATE, "%s", maintenanceDate[src]);
-        snprintf(new_details[pos], MAX_DETAILS, "%s", maintenanceDetails[src]);
+        snprintf(new_names[pos], MAX_NAME, "%.*s", MAX_NAME - 1, machineName[src]);
+        snprintf(new_dates[pos], MAX_DATE, "%.*s", MAX_DATE - 1, maintenanceDate[src]);
+        snprintf(new_details[pos], MAX_DETAILS, "%.*s", MAX_DETAILS - 1, maintenanceDetails[src]);
     }
 
     for (int i = 0; i < record_count; ++i)
     {
-        snprintf(machineName[i], MAX_NAME, "%s", new_names[i]);
-        snprintf(maintenanceDate[i], MAX_DATE, "%s", new_dates[i]);
-        snprintf(maintenanceDetails[i], MAX_DETAILS, "%s", new_details[i]);
+        snprintf(machineName[i], MAX_NAME, "%.*s", MAX_NAME - 1, new_names[i]);
+        snprintf(maintenanceDate[i], MAX_DATE, "%.*s", MAX_DATE - 1, new_dates[i]);
+        snprintf(maintenanceDetails[i], MAX_DETAILS, "%.*s", MAX_DETAILS - 1, new_details[i]);
 
         int written = snprintf(machineID[i], MAX_ID, "%d", i + 1);
         if (written < 0 || written >= MAX_ID)
@@ -2418,7 +2418,11 @@ void add_record(void)
             continue;
         }
 
-        if (handle_prompt_result(status, error_messages[step]))
+        const int message_count = (int)(sizeof(error_messages) / sizeof(error_messages[0]));
+        const char *message = (step >= 0 && step < message_count) ? error_messages[step]
+                                                                  : "Unexpected input error.";
+
+        if (handle_prompt_result(status, message))
         {
             return;
         }
