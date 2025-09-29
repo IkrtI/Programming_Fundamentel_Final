@@ -70,6 +70,7 @@ static int prompt_csv_index_selection(size_t csv_count, const char *prompt, int 
 static int has_csv_extension(const char *name);
 static int is_regular_file(const char *path, const struct dirent *entry);
 static int compare_csv_names(const void *lhs, const void *rhs);
+static void render_csv_menu(char *const *csv_files, size_t csv_count);
 static int compare_records_by_schedule(const void *lhs, const void *rhs);
 static void handle_addon_menu(void);
 static void display_addon_menu(void);
@@ -78,10 +79,14 @@ static void resequence_machine_ids(void);
 static void print_record_table_header(void);
 static void print_record_table_footer(void);
 static void print_record_table_row(int index);
+static void print_record_preview_from_values(const char *name, const char *id,
+                                             const char *date, const char *details);
 static int get_terminal_height(void);
 static int calculate_records_per_page(void);
 static void clear_console_output(void);
 static void clear_function_log(void);
+static int interpret_paging_arrow(const char *input);
+static int read_paging_command(char *buffer, size_t size);
 static int contains_back_signal(const char *str);
 static int parse_machine_id_value(const char *id, int *out_value);
 static int normalize_machine_id_value(int value, char *buffer, size_t size);
@@ -89,6 +94,7 @@ static int is_machine_id_unique(const char *id);
 static int find_smallest_available_machine_id(void);
 static int prompt_machine_id(char *buffer, size_t size);
 static int string_contains_case_insensitive(const char *haystack, const char *needle);
+static int prompt_confirmation(const char *prompt, int *out_confirmed);
 #if !defined(_WIN32) && !defined(UNIT_TEST)
 static void restore_terminal_settings(void);
 static int configure_terminal_shortcuts(void);
@@ -538,6 +544,50 @@ static int prompt_machine_id(char *buffer, size_t size)
     }
 }
 
+static int prompt_confirmation(const char *prompt, int *out_confirmed)
+{
+    if (!out_confirmed)
+    {
+        return INPUT_ERROR;
+    }
+
+    while (1)
+    {
+        char response[8];
+        int status = safe_input(response, sizeof(response), prompt);
+        if (status == INPUT_TOO_LONG)
+        {
+            printf("Please enter Y or N.\n");
+            continue;
+        }
+
+        if (status != INPUT_OK)
+        {
+            return status;
+        }
+
+        if (response[0] == '\0')
+        {
+            *out_confirmed = 1;
+            return INPUT_OK;
+        }
+
+        if (response[0] == 'Y' || response[0] == 'y')
+        {
+            *out_confirmed = 1;
+            return INPUT_OK;
+        }
+
+        if (response[0] == 'N' || response[0] == 'n')
+        {
+            *out_confirmed = 0;
+            return INPUT_OK;
+        }
+
+        printf("Please enter Y or N.\n");
+    }
+}
+
 static int copy_csv_file(const char *source, const char *destination)
 {
     if (!source || !destination)
@@ -611,14 +661,8 @@ static int prompt_csv_index_selection(size_t csv_count, const char *prompt, int 
         {
             return INPUT_EXIT;
         }
-        if (status == INPUT_BACK)
+        if (status == INPUT_BACK || status == INPUT_CANCELLED)
         {
-            print_cancel_message();
-            return INPUT_CANCELLED;
-        }
-        if (status == INPUT_CANCELLED)
-        {
-            print_cancel_message();
             return INPUT_CANCELLED;
         }
 
@@ -661,19 +705,13 @@ static int read_csv_menu_choice(size_t csv_count, int *selected_index, char *com
 
     while (1)
     {
-        int status = safe_input(buffer, sizeof(buffer), "Select CSV option (Ctrl+X cancel, Ctrl+Z back): ");
+        int status = safe_input(buffer, sizeof(buffer), "Select CSV option : ");
         if (status == INPUT_EXIT)
         {
             return INPUT_EXIT;
         }
-        if (status == INPUT_BACK)
+        if (status == INPUT_BACK || status == INPUT_CANCELLED)
         {
-            print_cancel_message();
-            return INPUT_CANCELLED;
-        }
-        if (status == INPUT_CANCELLED)
-        {
-            print_cancel_message();
             return INPUT_CANCELLED;
         }
 
@@ -692,7 +730,7 @@ static int read_csv_menu_choice(size_t csv_count, int *selected_index, char *com
         {
             if (csv_count > 0)
             {
-                printf("Invalid choice. Enter a number between 1 and %zu or A/N/D/Q.\n", csv_count);
+                printf("Invalid choice. Enter a number between 1 and %zu or C/A/N/D/Q.\n", csv_count);
             }
             else
             {
@@ -704,7 +742,7 @@ static int read_csv_menu_choice(size_t csv_count, int *selected_index, char *com
         if (isalpha((unsigned char)buffer[0]) && buffer[1] == '\0')
         {
             char c = (char)toupper((unsigned char)buffer[0]);
-            if (c == 'A' || c == 'N' || c == 'D' || c == 'Q')
+            if (c == 'A' || c == 'N' || c == 'D' || c == 'Q' || c == 'C')
             {
                 *command = c;
                 if (selected_index)
@@ -729,13 +767,45 @@ static int read_csv_menu_choice(size_t csv_count, int *selected_index, char *com
 
         if (csv_count > 0)
         {
-            printf("Invalid choice. Enter a number between 1 and %zu or A/N/D/Q.\n", csv_count);
+            printf("Invalid choice. Enter a number between 1 and %zu or C/A/N/D/Q.\n", csv_count);
         }
         else
         {
-            printf("Invalid choice. Enter A/N/Q.\n");
+            printf("Invalid choice. Enter C/A/N/Q.\n");
         }
     }
+}
+
+static void render_csv_menu(char *const *csv_files, size_t csv_count)
+{
+    const char *current_path = maintenance_get_csv_path();
+    const char *display_path = (current_path && current_path[0] != '\0') ? current_path : "default";
+
+    printf("\nCSV File Management\n\n");
+    printf("CSV current path: %s\n\n", display_path);
+
+    if (csv_count > 0 && csv_files)
+    {
+        for (size_t i = 0; i < csv_count; ++i)
+        {
+            printf("%zu. %s\n", i + 1, csv_files[i]);
+        }
+        printf("\n");
+    }
+    else
+    {
+        printf("(No CSV files detected in current directory)\n\n");
+    }
+
+    printf("Other\n");
+    printf("C. Continue with \"%s\" CSV file\n", display_path);
+    printf("A. Enter CSV file path manually\n");
+    printf("N. Create a new blank CSV file\n");
+    if (csv_count > 0)
+    {
+        printf("D. Duplicate an existing CSV file\n");
+    }
+    printf("Q. Exit\n");
 }
 
 static int show_csv_control_menu(void)
@@ -805,37 +875,18 @@ static int show_csv_control_menu(void)
         qsort(csv_files, csv_count, sizeof(char *), compare_csv_names);
     }
 
-    const char *current_path = maintenance_get_csv_path();
-    const char *display_path = (current_path && current_path[0] != '\0') ? current_path : "default";
-    printf("\nCSV File Management\n\n");
-    printf("CSV current path: %s\n\n", display_path);
-
-    if (csv_count > 0)
-    {
-        for (size_t i = 0; i < csv_count; ++i)
-        {
-            printf("%zu. %s\n", i + 1, csv_files[i]);
-        }
-        printf("\n");
-    }
-    else
-    {
-        printf("(No CSV files detected in current directory)\n\n");
-    }
-
-    printf("Other\n");
-    printf("A. Enter CSV file path manually\n");
-    printf("N. Create a new blank CSV file\n");
-    if (csv_count > 0)
-    {
-        printf("D. Duplicate an existing CSV file\n");
-    }
-    printf("Q. Exit\n");
-
     int result = 1;
+    int needs_refresh = 1;
 
     while (!exit_requested && !interrupt_requested)
     {
+        if (needs_refresh)
+        {
+            clear_console_output();
+            render_csv_menu(csv_files, csv_count);
+            needs_refresh = 0;
+        }
+
         int selected_index = -1;
         char command = '\0';
         int status = read_csv_menu_choice(csv_count, &selected_index, &command);
@@ -846,7 +897,8 @@ static int show_csv_control_menu(void)
         }
         if (status == INPUT_CANCELLED)
         {
-            break;
+            needs_refresh = 1;
+            continue;
         }
 
         if (status == INPUT_ERROR)
@@ -876,15 +928,10 @@ static int show_csv_control_menu(void)
                 result = -1;
                 break;
             }
-            if (input_status == INPUT_BACK)
+            if (input_status == INPUT_BACK || input_status == INPUT_CANCELLED)
             {
-                print_cancel_message();
-                break;
-            }
-            if (input_status == INPUT_CANCELLED)
-            {
-                print_cancel_message();
-                break;
+                needs_refresh = 1;
+                continue;
             }
 
             if (input_status == INPUT_ERROR)
@@ -919,15 +966,10 @@ static int show_csv_control_menu(void)
                 result = -1;
                 break;
             }
-            if (input_status == INPUT_BACK)
+            if (input_status == INPUT_BACK || input_status == INPUT_CANCELLED)
             {
-                print_cancel_message();
-                break;
-            }
-            if (input_status == INPUT_CANCELLED)
-            {
-                print_cancel_message();
-                break;
+                needs_refresh = 1;
+                continue;
             }
 
             if (input_status == INPUT_ERROR)
@@ -969,7 +1011,7 @@ static int show_csv_control_menu(void)
             }
 
             int source_index = -1;
-            int index_status = prompt_csv_index_selection(csv_count, "Enter the number of the CSV to duplicate (Ctrl+X cancel, Ctrl+Z back):", &source_index);
+            int index_status = prompt_csv_index_selection(csv_count, "Enter the number of the CSV to duplicate:", &source_index);
             if (index_status == INPUT_EXIT)
             {
                 result = -1;
@@ -977,7 +1019,8 @@ static int show_csv_control_menu(void)
             }
             if (index_status == INPUT_CANCELLED)
             {
-                break;
+                needs_refresh = 1;
+                continue;
             }
 
             if (index_status == INPUT_ERROR)
@@ -994,15 +1037,10 @@ static int show_csv_control_menu(void)
                 result = -1;
                 break;
             }
-            if (dest_status == INPUT_BACK)
+            if (dest_status == INPUT_BACK || dest_status == INPUT_CANCELLED)
             {
-                print_cancel_message();
-                break;
-            }
-            if (dest_status == INPUT_CANCELLED)
-            {
-                print_cancel_message();
-                break;
+                needs_refresh = 1;
+                continue;
             }
 
             if (dest_status == INPUT_ERROR)
@@ -1035,10 +1073,16 @@ static int show_csv_control_menu(void)
             result = 0;
             break;
         }
+        else if (command == 'C')
+        {
+            printf("Continuing with the current CSV file.\n");
+            result = 1;
+            break;
+        }
         else if (command == 'Q')
         {
-            printf("Exiting CSV menu.\n");
-            result = 1;
+            // exit program
+            result = -1;
             break;
         }
     }
@@ -1058,7 +1102,7 @@ static int show_csv_control_menu(void)
     {
         return -1;
     }
-
+    clear_console_output();
     return result;
 }
 
@@ -1213,6 +1257,23 @@ static void print_record_table_footer(void)
     printf("+----------------------+--------------+--------------+--------------------------------+\n");
 }
 
+static void print_record_preview_from_values(const char *name, const char *id,
+                                             const char *date, const char *details)
+{
+    const char *safe_name = name ? name : "";
+    const char *safe_id = id ? id : "";
+    const char *safe_date = date ? date : "";
+    const char *safe_details = details ? details : "";
+
+    print_record_table_header();
+    printf("| %-20.20s | %-12.12s | %-12.12s | %-30.30s |\n",
+           safe_name,
+           safe_id,
+           safe_date,
+           safe_details);
+    print_record_table_footer();
+}
+
 static int get_terminal_height(void)
 {
 #if defined(_WIN32)
@@ -1353,6 +1414,197 @@ static void clear_function_log(void)
 #endif
 }
 
+static int interpret_paging_arrow(const char *input)
+{
+    if (!input || input[0] != 0x1B)
+    {
+        return 0;
+    }
+
+    size_t len = strlen(input);
+    if (len < 2)
+    {
+        return 0;
+    }
+
+    unsigned char second = (unsigned char)input[1];
+    if (second != '[' && second != 'O')
+    {
+        return 0;
+    }
+
+    char final = (len > 0) ? input[len - 1] : '\0';
+    if (final == 'C' || final == 'B')
+    {
+        return 1;
+    }
+    if (final == 'D' || final == 'A')
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int read_paging_command(char *buffer, size_t size)
+{
+    if (!buffer || size <= 0)
+    {
+        return INPUT_ERROR;
+    }
+
+#if defined(UNIT_TEST)
+    return safe_input(buffer, size, "Paging command: ");
+#elif defined(_WIN32)
+    return safe_input(buffer, size, "Paging command: ");
+#else
+    if (!isatty(STDIN_FILENO))
+    {
+        return safe_input(buffer, size, "Paging command: ");
+    }
+
+    struct termios original;
+    if (tcgetattr(STDIN_FILENO, &original) != 0)
+    {
+        return safe_input(buffer, size, "Paging command: ");
+    }
+
+    struct termios raw = original;
+    raw.c_lflag &= ~(ICANON | ECHO);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0)
+    {
+        return safe_input(buffer, size, "Paging command: ");
+    }
+
+    printf("Paging command: ");
+    fflush(stdout);
+
+    int status = INPUT_OK;
+    size_t pos = 0;
+    int reading_number = 0;
+
+    while (pos + 1 < (size_t)size)
+    {
+        unsigned char ch = 0;
+        ssize_t bytes_read = read(STDIN_FILENO, &ch, 1);
+        if (bytes_read <= 0)
+        {
+            status = INPUT_ERROR;
+            pos = 0;
+            buffer[0] = '\0';
+            break;
+        }
+
+        if (ch == 0x18)
+        {
+            status = INPUT_CANCELLED;
+            pos = 0;
+            buffer[0] = '\0';
+            break;
+        }
+
+        if (ch == 0x1A)
+        {
+            status = INPUT_BACK;
+            pos = 0;
+            buffer[0] = '\0';
+            break;
+        }
+
+        if (ch == 0x03)
+        {
+            request_exit();
+            status = INPUT_EXIT;
+            pos = 0;
+            buffer[0] = '\0';
+            break;
+        }
+
+        if (ch == '\r' || ch == '\n')
+        {
+            if (!reading_number)
+            {
+                pos = 0;
+                buffer[0] = '\0';
+            }
+            break;
+        }
+
+        if (ch == 0x1B)
+        {
+            buffer[pos++] = (char)ch;
+
+            while (pos + 1 < (size_t)size)
+            {
+                unsigned char next = 0;
+                ssize_t more_read = read(STDIN_FILENO, &next, 1);
+                if (more_read <= 0)
+                {
+                    status = INPUT_ERROR;
+                    pos = 0;
+                    buffer[0] = '\0';
+                    break;
+                }
+
+                buffer[pos++] = (char)next;
+
+                if ((next >= 'A' && next <= 'D') || next == '~')
+                {
+                    break;
+                }
+
+                if (!isdigit((unsigned char)next) && next != ';' && next != '[' && next != 'O')
+                {
+                    break;
+                }
+            }
+            break;
+        }
+
+        if (pos + 1 >= (size_t)size)
+        {
+            status = INPUT_TOO_LONG;
+            pos = 0;
+            buffer[0] = '\0';
+            break;
+        }
+
+        buffer[pos++] = (char)ch;
+        buffer[pos] = '\0';
+
+        if (!reading_number)
+        {
+            if (isdigit((unsigned char)ch))
+            {
+                reading_number = 1;
+                continue;
+            }
+            break;
+        }
+    }
+
+    buffer[pos] = '\0';
+
+    if (status == INPUT_TOO_LONG)
+    {
+        tcflush(STDIN_FILENO, TCIFLUSH);
+    }
+
+    printf("\n");
+    fflush(stdout);
+
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &original) != 0)
+    {
+        status = INPUT_ERROR;
+    }
+
+    return status;
+#endif
+}
+
 int reload_records_with_warning(void)
 {
     if (load_records() != 0)
@@ -1477,10 +1729,13 @@ int main(void)
             break;
         }
 
+        int should_clear_log = 0;
+
         switch (choice)
         {
         case 1:
             display_records();
+            should_clear_log = 1;
             break;
         case 2:
             add_record();
@@ -1488,9 +1743,11 @@ int main(void)
             {
                 reload_records_with_warning();
             }
+            should_clear_log = 1;
             break;
         case 3:
             search_records();
+            should_clear_log = 1;
             break;
         case 4:
             update_record();
@@ -1498,6 +1755,7 @@ int main(void)
             {
                 reload_records_with_warning();
             }
+            should_clear_log = 1;
             break;
         case 5:
             delete_record();
@@ -1505,12 +1763,15 @@ int main(void)
             {
                 reload_records_with_warning();
             }
+            should_clear_log = 1;
             break;
         case 6:
             handle_addon_menu();
+            should_clear_log = 1;
             break;
         case 7:
             run_test_program();
+            should_clear_log = 1;
             break;
         case 8:
             printf("Exiting...\n");
@@ -1518,6 +1779,11 @@ int main(void)
             break;
         default:
             printf("Invalid choice. Please try again.\n");
+        }
+
+        if (should_clear_log && !exit_requested && !interrupt_requested)
+        {
+            clear_function_log();
         }
     } while (!exit_requested && choice != 8);
 
@@ -1880,13 +2146,40 @@ void display_records(void)
             break;
         }
 
-        printf("Commands: Enter=next, p=previous, q=quit, number=jump\n");
+        printf("Commands: Enter/right/down arrow=next, left/up arrow=previous, q=quit, number=jump\n");
 
         char input[32];
-        int status = safe_input(input, sizeof(input), "Paging command: ");
+        int status = read_paging_command(input, sizeof(input));
 
         if (status == INPUT_OK)
         {
+            int arrow_delta = interpret_paging_arrow(input);
+            if (arrow_delta > 0)
+            {
+                if (current_page + 1 < total_pages)
+                {
+                    current_page++;
+                }
+                else
+                {
+                    snprintf(status_message, sizeof(status_message), "Already on the last page.");
+                }
+                continue;
+            }
+
+            if (arrow_delta < 0)
+            {
+                if (current_page > 0)
+                {
+                    current_page--;
+                }
+                else
+                {
+                    snprintf(status_message, sizeof(status_message), "Already on the first page.");
+                }
+                continue;
+            }
+
             if (input[0] == '\0')
             {
                 if (current_page + 1 < total_pages)
@@ -2113,6 +2406,26 @@ void add_record(void)
         }
     }
 
+    printf("\nNew record preview:\n");
+    print_record_preview_from_values(name, id, date, details);
+
+    int confirmed = 0;
+    int confirm_status = prompt_confirmation("Do you want to continue? [Y/n] ", &confirmed);
+    if (confirm_status != INPUT_OK)
+    {
+        if (handle_prompt_result(confirm_status, "Error reading confirmation."))
+        {
+            return;
+        }
+        return;
+    }
+
+    if (!confirmed)
+    {
+        print_cancel_message();
+        return;
+    }
+
     record_result_t insert_status = add_record_direct(name, id, date, details);
     if (insert_status == RECORD_SUCCESS)
     {
@@ -2261,6 +2574,31 @@ void update_record(void)
                 }
             }
 
+            printf("\nCurrent record:\n");
+            print_record_table_header();
+            print_record_table_row(i);
+            print_record_table_footer();
+
+            printf("\nUpdated record preview:\n");
+            print_record_preview_from_values(new_name, machineID[i], new_date, new_details);
+
+            int confirmed = 0;
+            int confirm_status = prompt_confirmation("Do you want to continue? [Y/n] ", &confirmed);
+            if (confirm_status != INPUT_OK)
+            {
+                if (handle_prompt_result(confirm_status, "Error reading confirmation."))
+                {
+                    return;
+                }
+                return;
+            }
+
+            if (!confirmed)
+            {
+                print_cancel_message();
+                return;
+            }
+
             snprintf(machineName[i], MAX_NAME, "%s", new_name);
             snprintf(maintenanceDate[i], MAX_DATE, "%s", new_date);
             snprintf(maintenanceDetails[i], MAX_DETAILS, "%s", new_details);
@@ -2281,6 +2619,44 @@ void delete_record(void)
                                         "Machine ID must be a positive whole number.");
     if (handle_prompt_result(status, "Error reading machine ID."))
     {
+        return;
+    }
+
+    int target_index = -1;
+    for (int i = 0; i < record_count; ++i)
+    {
+        if (strcmp(machineID[i], id) == 0)
+        {
+            target_index = i;
+            break;
+        }
+    }
+
+    if (target_index < 0)
+    {
+        printf("No record with Machine ID '%s'.\n", id);
+        return;
+    }
+
+    printf("\nRecord selected for deletion:\n");
+    print_record_table_header();
+    print_record_table_row(target_index);
+    print_record_table_footer();
+
+    int confirmed = 0;
+    int confirm_status = prompt_confirmation("Do you want to continue? [Y/n] ", &confirmed);
+    if (confirm_status != INPUT_OK)
+    {
+        if (handle_prompt_result(confirm_status, "Error reading confirmation."))
+        {
+            return;
+        }
+        return;
+    }
+
+    if (!confirmed)
+    {
+        print_cancel_message();
         return;
     }
 
@@ -2568,19 +2944,15 @@ int read_menu_choice(void)
 
     while (1)
     {
-        int status = safe_input(buffer, sizeof(buffer), "Enter your choice (Ctrl+X cancel, Ctrl+Z back): ");
+        int status = safe_input(buffer, sizeof(buffer), "Enter your choice : ");
         if (status == INPUT_EXIT)
         {
             return 8;
         }
-        if (status == INPUT_BACK)
+        if (status == INPUT_BACK || status == INPUT_CANCELLED)
         {
-            print_cancel_message();
-            continue;
-        }
-        if (status == INPUT_CANCELLED)
-        {
-            print_cancel_message();
+            clear_console_output();
+            display_menu();
             continue;
         }
 
@@ -2597,7 +2969,9 @@ int read_menu_choice(void)
 
         if (buffer[0] == '\0')
         {
+            clear_console_output();
             printf("Invalid choice. Please enter a number between 1 and 8.\n");
+            display_menu();
             continue;
         }
 
@@ -2608,7 +2982,9 @@ int read_menu_choice(void)
             return (int)value;
         }
 
+        clear_console_output();
         printf("Invalid choice. Please enter a number between 1 and 8.\n");
+        display_menu();
     }
 }
 #endif
