@@ -8,6 +8,12 @@
 #include <errno.h>
 #include <limits.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/ioctl.h>
+#endif
+
 #if !defined(_WIN32)
 #include <unistd.h>
 #endif
@@ -72,6 +78,10 @@ static void resequence_machine_ids(void);
 static void print_record_table_header(void);
 static void print_record_table_footer(void);
 static void print_record_table_row(int index);
+static int get_terminal_height(void);
+static int calculate_records_per_page(void);
+static void clear_console_output(void);
+static void clear_function_log(void);
 static int contains_back_signal(const char *str);
 static int parse_machine_id_value(const char *id, int *out_value);
 static int normalize_machine_id_value(int value, char *buffer, size_t size);
@@ -1203,6 +1213,146 @@ static void print_record_table_footer(void)
     printf("+----------------------+--------------+--------------+--------------------------------+\n");
 }
 
+static int get_terminal_height(void)
+{
+#if defined(_WIN32)
+    HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (output != INVALID_HANDLE_VALUE)
+    {
+        CONSOLE_SCREEN_BUFFER_INFO info;
+        if (GetConsoleScreenBufferInfo(output, &info))
+        {
+            int height = info.srWindow.Bottom - info.srWindow.Top + 1;
+            if (height > 0)
+            {
+                return height;
+            }
+        }
+    }
+#else
+    if (isatty(STDOUT_FILENO))
+    {
+        struct winsize ws;
+        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0)
+        {
+            return (int)ws.ws_row;
+        }
+    }
+#endif
+
+    const char *env_lines = getenv("LINES");
+    if (env_lines)
+    {
+        char *endptr = NULL;
+        long value = strtol(env_lines, &endptr, 10);
+        if (endptr && *endptr == '\0' && value > 0 && value <= INT_MAX)
+        {
+            return (int)value;
+        }
+    }
+
+    return 24;
+}
+
+static int calculate_records_per_page(void)
+{
+    int terminal_height = get_terminal_height();
+    const int reserved_lines = 8;
+    int available_rows = terminal_height - reserved_lines;
+
+    if (available_rows < 1)
+    {
+        available_rows = 1;
+    }
+
+    if (record_count > 0 && available_rows > record_count)
+    {
+        available_rows = record_count;
+    }
+
+    return (available_rows > 0) ? available_rows : 1;
+}
+
+static void clear_console_output(void)
+{
+#if defined(UNIT_TEST)
+    (void)0;
+#elif defined(_WIN32)
+    HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (output == INVALID_HANDLE_VALUE)
+    {
+        return;
+    }
+
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    if (!GetConsoleScreenBufferInfo(output, &info))
+    {
+        return;
+    }
+
+    DWORD cell_count = (DWORD)info.dwSize.X * (DWORD)info.dwSize.Y;
+    COORD home = {0, 0};
+    DWORD written = 0;
+
+    FillConsoleOutputCharacter(output, ' ', cell_count, home, &written);
+    FillConsoleOutputAttribute(output, info.wAttributes, cell_count, home, &written);
+    SetConsoleCursorPosition(output, home);
+#else
+    if (!isatty(STDOUT_FILENO))
+    {
+        return;
+    }
+
+    printf("\033[2J\033[H");
+    fflush(stdout);
+#endif
+}
+
+static void clear_function_log(void)
+{
+#if defined(UNIT_TEST)
+    (void)0;
+#else
+    if (exit_requested || interrupt_requested)
+    {
+        return;
+    }
+
+    char buffer[8];
+    printf("\n");
+
+    while (1)
+    {
+        int status = safe_input(buffer, sizeof(buffer), "Press Enter to clear log and return to the menu: ");
+
+        if (status == INPUT_EXIT)
+        {
+            return;
+        }
+
+        if (status == INPUT_CANCELLED || status == INPUT_BACK)
+        {
+            clear_console_output();
+            return;
+        }
+
+        if (status == INPUT_ERROR)
+        {
+            return;
+        }
+
+        if (status == INPUT_TOO_LONG)
+        {
+            continue;
+        }
+
+        break;
+    }
+
+    clear_console_output();
+#endif
+}
+
 int reload_records_with_warning(void)
 {
     if (load_records() != 0)
@@ -1673,13 +1823,146 @@ void display_records(void)
         return;
     }
 
-    printf("\n");
-    print_record_table_header();
-    for (int i = 0; i < record_count; ++i)
+    int records_per_page = calculate_records_per_page();
+    if (records_per_page <= 0)
     {
-        print_record_table_row(i);
+        records_per_page = 1;
     }
-    print_record_table_footer();
+
+    int total_pages = (record_count + records_per_page - 1) / records_per_page;
+    int current_page = 0;
+    char status_message[128];
+    status_message[0] = '\0';
+
+    while (!exit_requested && !interrupt_requested)
+    {
+        if (!exit_requested && !interrupt_requested)
+        {
+            clear_console_output();
+        }
+
+        int start_index = current_page * records_per_page;
+        if (start_index >= record_count)
+        {
+            current_page = (total_pages > 0) ? (total_pages - 1) : 0;
+            start_index = current_page * records_per_page;
+        }
+
+        int end_index = start_index + records_per_page;
+        if (end_index > record_count)
+        {
+            end_index = record_count;
+        }
+
+        printf("\n");
+        print_record_table_header();
+        for (int i = start_index; i < end_index; ++i)
+        {
+            print_record_table_row(i);
+        }
+        print_record_table_footer();
+
+        printf("Records %d-%d of %d | Page %d/%d\n",
+               start_index + 1,
+               end_index,
+               record_count,
+               current_page + 1,
+               total_pages);
+
+        if (status_message[0] != '\0')
+        {
+            printf("%s\n", status_message);
+            status_message[0] = '\0';
+        }
+
+        if (total_pages <= 1)
+        {
+            break;
+        }
+
+        printf("Commands: Enter=next, p=previous, q=quit, number=jump\n");
+
+        char input[32];
+        int status = safe_input(input, sizeof(input), "Paging command: ");
+
+        if (status == INPUT_OK)
+        {
+            if (input[0] == '\0')
+            {
+                if (current_page + 1 < total_pages)
+                {
+                    current_page++;
+                }
+                else
+                {
+                    snprintf(status_message, sizeof(status_message), "Already on the last page.");
+                }
+                continue;
+            }
+
+            char command = (char)tolower((unsigned char)input[0]);
+            if (command == 'q')
+            {
+                break;
+            }
+            else if (command == 'n')
+            {
+                if (current_page + 1 < total_pages)
+                {
+                    current_page++;
+                }
+                else
+                {
+                    snprintf(status_message, sizeof(status_message), "Already on the last page.");
+                }
+            }
+            else if (command == 'p')
+            {
+                if (current_page > 0)
+                {
+                    current_page--;
+                }
+                else
+                {
+                    snprintf(status_message, sizeof(status_message), "Already on the first page.");
+                }
+            }
+            else
+            {
+                char *endptr = NULL;
+                long page_value = strtol(input, &endptr, 10);
+                if (endptr && *endptr == '\0')
+                {
+                    if (page_value >= 1 && page_value <= total_pages)
+                    {
+                        current_page = (int)page_value - 1;
+                    }
+                    else
+                    {
+                        snprintf(status_message, sizeof(status_message),
+                                 "Page must be between 1 and %d.", total_pages);
+                    }
+                }
+                else
+                {
+                    snprintf(status_message, sizeof(status_message),
+                             "Invalid command. Use Enter, n, p, q, or page number.");
+                }
+            }
+        }
+        else if (status == INPUT_TOO_LONG)
+        {
+            snprintf(status_message, sizeof(status_message),
+                     "Command too long. Please enter n, p, q, or a page number.");
+        }
+        else
+        {
+            if (handle_prompt_result(status, "Error reading pagination command."))
+            {
+                break;
+            }
+        }
+    }
 }
 
 static record_result_t add_record_direct(const char *name, const char *id,
