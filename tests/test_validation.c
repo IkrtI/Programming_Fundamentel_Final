@@ -1,4 +1,8 @@
+#if !defined(_WIN32)
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
+#endif
 
 #include <stdio.h>
 #include <string.h>
@@ -145,10 +149,15 @@ static void test_is_valid_machine_name(void)
 
 static void test_is_valid_machine_id(void)
 {
+    EXPECT_TRUE(is_valid_machine_id("123"));
     EXPECT_TRUE(is_valid_machine_id("ID-123_45.6"));
+    EXPECT_TRUE(is_valid_machine_id("A.B_C-1"));
+    EXPECT_TRUE(!is_valid_machine_id(""));
     EXPECT_TRUE(!is_valid_machine_id("with space"));
     EXPECT_TRUE(!is_valid_machine_id("comma,here"));
     EXPECT_TRUE(!is_valid_machine_id("invalid#char"));
+    EXPECT_TRUE(!is_valid_machine_id("id@123"));
+    EXPECT_TRUE(!is_valid_machine_id(NULL));
 }
 
 static void test_is_valid_date(void)

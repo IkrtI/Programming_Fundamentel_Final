@@ -1,4 +1,8 @@
+#if !defined(_WIN32)
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -567,4 +571,3 @@ int main(void)
     printf("⚠️ Result: End-to-End tests encountered failures\n");
     return 1;
 }
-
