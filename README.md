@@ -1,5 +1,16 @@
-# Machine Maintenance Manager
-[![CI](https://github.com/IkrtI/Programming_Fundamentel_Final/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/IkrtI/Programming_Fundamentel_Final/actions/workflows/ci.yml)
+<h1 align="center">
+Machine Maintenance Manager
+</h1>
+<p align="center">
+  <img src="https://github.com/IkrtI/Programming_Fundamentel_Final/actions/workflows/ci.yml/badge.svg?branch=main">
+  <img src="https://img.shields.io/github/stars/ikrti/Programming_Fundamentel_Fina?style=flat-square&color=5005ff">
+  <img src="https://img.shields.io/github/license/ikrti/Programming_Fundamentel_Fina?style=flat-square&color=5005ff">
+  <img src="https://img.shields.io/github/issues/ikrti/Programming_Fundamentel_Fina?style=flat-square&color=5005ff">
+  <img src="https://img.shields.io/github/languages/top/ikrti/Programming_Fundamentel_Fina?style=flat-square&color=5005ff">
+  <img src="https://img.shields.io/github/repo-size/ikrti/Programming_Fundamentel_Fina?style=flat-square&color=5005ff">
+  <img src="https://img.shields.io/github/last-commit/ikrti/Programming_Fundamentel_Fina?style=flat-square&color=5005ff">
+  <img src="https://img.shields.io/github/commit-activity/m/ikrti/Programming_Fundamentel_Fina?style=flat-square&color=5005ff">
+</p>
 
 > ระบบจัดการประวัติการบำรุงรักษาเครื่องจักร (ภาษา C) พร้อมตัวอย่างข้อมูล CSV และชุดทดสอบอัตโนมัติ
 
