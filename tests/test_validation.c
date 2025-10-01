@@ -123,6 +123,21 @@ static void test_sanitize_input(void)
     EXPECT_STREQ("Another Value", str2);
 }
 
+static void test_safe_input_eof_without_newline(void)
+{
+    int saved_fd = -1;
+    FILE *temp = NULL;
+    EXPECT_TRUE(redirect_stdin_from_string("EOF without newline", &saved_fd, &temp) == 0);
+
+    char buffer[64];
+    int status = safe_input(buffer, sizeof(buffer), "Prompt: ");
+
+    restore_stdin(saved_fd, temp);
+
+    EXPECT_TRUE(status == INPUT_OK);
+    EXPECT_STREQ("EOF without newline", buffer);
+}
+
 static void test_is_non_empty(void)
 {
     EXPECT_TRUE(is_non_empty("Hello"));
@@ -394,6 +409,7 @@ int main(void)
 {
     test_trim_whitespace();
     test_sanitize_input();
+    test_safe_input_eof_without_newline();
     test_is_non_empty();
     test_contains_disallowed_csv_chars();
     test_is_valid_machine_name();

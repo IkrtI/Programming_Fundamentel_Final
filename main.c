@@ -2880,7 +2880,14 @@ int safe_input(char *buffer, int size, const char *prompt)
         return INPUT_ERROR;
     }
 
-    int truncated = (strchr(buffer, '\n') == NULL);
+    char *newline = strchr(buffer, '\n');
+    int truncated = (newline == NULL && !feof(stdin));
+
+    if (newline)
+    {
+        *newline = '\0';
+    }
+
     if (contains_cancel_signal(buffer))
     {
         if (truncated)
@@ -2901,14 +2908,15 @@ int safe_input(char *buffer, int size, const char *prompt)
         return INPUT_BACK;
     }
 
-    sanitize_input(buffer);
-
     if (truncated)
     {
+        flush_line();
         printf("Input too long. Maximum length is %d characters.\n", size - 1);
         buffer[0] = '\0';
         return INPUT_TOO_LONG;
     }
+
+    sanitize_input(buffer);
 
     return INPUT_OK;
 }
@@ -3071,10 +3079,6 @@ void sanitize_input(char *buffer)
     if (buffer[len] != '\0')
     {
         buffer[len] = '\0';
-    }
-    else
-    {
-        flush_line();
     }
 
     trim_whitespace(buffer);
