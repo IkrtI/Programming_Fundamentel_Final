@@ -1,7 +1,22 @@
-# Machine Maintenance Manager
-[![CI](https://github.com/IkrtI/Programming_Fundamentel_Final/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/IkrtI/Programming_Fundamentel_Final/actions/workflows/ci.yml)
+<h1 align="center">
+Machine Maintenance Manager
+</h1>
+<p align="center">
+ระบบจัดการประวัติการบำรุงรักษาเครื่องจักร (ภาษา C) พร้อมตัวอย่างข้อมูล CSV และชุดทดสอบอัตโนมัติ
+</p>
 
-> ระบบจัดการประวัติการบำรุงรักษาเครื่องจักร (ภาษา C) พร้อมตัวอย่างข้อมูล CSV และชุดทดสอบอัตโนมัติ
+<p align="center">
+  <img src="https://github.com/IkrtI/Programming_Fundamentel_Final/actions/workflows/ci.yml/badge.svg?branch=main">
+  <img src="https://img.shields.io/github/license/ikrti/Programming_Fundamentel_Final?logo=github&labelColor=%23404040&color=%234f004f">
+  <img src="https://img.shields.io/github/issues/ikrti/Programming_Fundamentel_Final?logo=github&labelColor=%23404040&color=%234f004f">
+  <img src="https://img.shields.io/github/languages/top/ikrti/Programming_Fundamentel_Final?logo=github&labelColor=%23404040&color=%234f004f">
+</p><p align="center">
+  <img src="https://img.shields.io/github/repo-size/ikrti/Programming_Fundamentel_Final?logo=github&labelColor=%23404040&color=%234f004f">
+  <img src="https://img.shields.io/github/last-commit/ikrti/Programming_Fundamentel_Final?logo=github&labelColor=%23404040&color=%234f004f">
+  <img src="https://img.shields.io/github/commit-activity/m/ikrti/Programming_Fundamentel_Final?logo=github&labelColor=%23404040&color=%234f004f">
+</p>
+
+----
 
 ## 📚 Table of Contents
 
