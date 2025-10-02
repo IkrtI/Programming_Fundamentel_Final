@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "maintenance.h"
+#include "maintenance_test_api.h"
 
 static int tests_run = 0;
 static int tests_failed = 0;

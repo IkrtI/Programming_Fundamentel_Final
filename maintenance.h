@@ -1,15 +1,11 @@
 #ifndef MAINTENANCE_H
 #define MAINTENANCE_H
 
-#include <stddef.h>
-
-#ifndef CSV_FILE_DEFAULT
+// =============================================================================
+//  Constants
+// =============================================================================
 #define CSV_FILE_DEFAULT "maintenance.csv"
-#endif
-
-#ifndef CSV_PATH_MAX
 #define CSV_PATH_MAX 512
-#endif
 
 #define MAX_RECORDS 10000
 #define MAX_NAME 64
@@ -17,6 +13,9 @@
 #define MAX_DATE 16
 #define MAX_DETAILS 256
 
+// =============================================================================
+//  Input Status Codes
+// =============================================================================
 #define INPUT_OK 0
 #define INPUT_ERROR -1
 #define INPUT_CANCELLED -2
@@ -24,34 +23,16 @@
 #define INPUT_EXIT -4
 #define INPUT_BACK -5
 
-int ensure_csv_exists(void);
-int load_records(void);
-int save_all_records(void);
-int reload_records_with_warning(void);
-void display_records(void);
-void add_record(void);
-void search_records(void);
-void update_record(void);
-void delete_record(void);
-void manage_deleted_records(void);
-int safe_input(char *buffer, int size, const char *prompt);
-int prompt_with_validation(char *buffer, int size, const char *prompt,
-                           int (*validator)(const char *), const char *error_message);
-void trim_whitespace(char *str);
-void sanitize_input(char *buffer);
-int is_non_empty(const char *str);
-int is_valid_machine_name(const char *str);
-int is_valid_machine_id(const char *str);
-int is_valid_date(const char *str);
-int is_valid_details(const char *str);
-int contains_disallowed_csv_chars(const char *str);
-int prompt_optional_update(const char *prompt, char *dest, int dest_size,
-                           int (*validator)(const char *), const char *error_message);
-int maintenance_set_csv_path(const char *path);
-const char *maintenance_get_csv_path(void);
-int contains_cancel_signal(const char *str);
-int is_record_storage_full(void);
-
-extern int record_count;
+// =============================================================================
+//  Record Operation Results
+// =============================================================================
+typedef enum record_result
+{
+    RECORD_SUCCESS = 0,
+    RECORD_ERROR_STORAGE_FULL = -1,
+    RECORD_ERROR_INVALID_DATA = -2,
+    RECORD_ERROR_DUPLICATE_ID = -3,
+    RECORD_ERROR_NOT_FOUND = -4
+} record_result_t;
 
 #endif /* MAINTENANCE_H */

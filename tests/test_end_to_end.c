@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "maintenance.h"
+#include "maintenance_test_api.h"
 
 extern char machineName[MAX_RECORDS][MAX_NAME];
 extern char machineID[MAX_RECORDS][MAX_ID];
