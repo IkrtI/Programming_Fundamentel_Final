@@ -2881,11 +2881,22 @@ int safe_input(char *buffer, int size, const char *prompt)
     }
 
     char *newline = strchr(buffer, '\n');
-    int truncated = (newline == NULL && !feof(stdin));
+    int newline_missing = (newline == NULL);
 
     if (newline)
     {
         *newline = '\0';
+    }
+
+    int stream_error = ferror(stdin);
+    int eof_reached = feof(stdin);
+    int truncated = (newline_missing && !eof_reached && !stream_error);
+
+    if (stream_error)
+    {
+        clearerr(stdin);
+        buffer[0] = '\0';
+        return INPUT_ERROR;
     }
 
     if (contains_cancel_signal(buffer))

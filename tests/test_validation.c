@@ -138,6 +138,25 @@ static void test_safe_input_eof_without_newline(void)
     EXPECT_STREQ("EOF without newline", buffer);
 }
 
+static void test_safe_input_overflow_flushes(void)
+{
+    int saved_fd = -1;
+    FILE *temp = NULL;
+    const char *input = "This line is definitely longer than the buffer size provided\nNext line\n";
+    EXPECT_TRUE(redirect_stdin_from_string(input, &saved_fd, &temp) == 0);
+
+    char buffer[32];
+    int status = safe_input(buffer, sizeof(buffer), "Prompt: ");
+    EXPECT_TRUE(status == INPUT_TOO_LONG);
+    EXPECT_STREQ("", buffer);
+
+    status = safe_input(buffer, sizeof(buffer), "Prompt: ");
+    EXPECT_TRUE(status == INPUT_OK);
+    EXPECT_STREQ("Next line", buffer);
+
+    restore_stdin(saved_fd, temp);
+}
+
 static void test_is_non_empty(void)
 {
     EXPECT_TRUE(is_non_empty("Hello"));
@@ -410,6 +429,7 @@ int main(void)
     test_trim_whitespace();
     test_sanitize_input();
     test_safe_input_eof_without_newline();
+    test_safe_input_overflow_flushes();
     test_is_non_empty();
     test_contains_disallowed_csv_chars();
     test_is_valid_machine_name();
