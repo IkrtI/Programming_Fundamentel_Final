@@ -534,6 +534,21 @@ static void test_update_and_delete_workflow(void)
     ASSERT_EQ_INT(0, recordActive[0], "Record is marked as deleted after soft delete");
     ASSERT_EQ_INT(0, save_all_records(), "Saved file after soft delete");
 
+    {
+        FILE *capture = NULL;
+        int saved_stdout = -1;
+        ASSERT_EQ_INT(0, start_stdout_capture(&capture, &saved_stdout),
+                      "Begin capturing display_records() after soft delete");
+        display_records();
+        char *display_output = stop_stdout_capture(capture, saved_stdout);
+        ASSERT_TRUE(display_output != NULL, "Captured display output after soft delete");
+        ASSERT_TRUE(strstr(display_output, "LC-07") == NULL,
+                    "Archived record is hidden from list view");
+        ASSERT_TRUE(strstr(display_output, "No active maintenance records") != NULL,
+                    "Display indicates there are no active records");
+        free(display_output);
+    }
+
     printf("   Step 6: Reload to confirm archived status\n");
     reset_in_memory_records();
     ASSERT_EQ_INT(0, load_records(), "Load file after soft deletion");

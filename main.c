@@ -2156,9 +2156,26 @@ int save_all_records(void)
 
 void display_records(void)
 {
-    if (record_count == 0)
+    int active_indices[MAX_RECORDS];
+    int active_count = 0;
+    for (int i = 0; i < record_count; ++i)
     {
-        printf("No maintenance records.\n");
+        if (recordActive[i])
+        {
+            active_indices[active_count++] = i;
+        }
+    }
+
+    if (active_count == 0)
+    {
+        if (record_count == 0)
+        {
+            printf("No maintenance records.\n");
+        }
+        else
+        {
+            printf("No active maintenance records.\n");
+        }
         return;
     }
 
@@ -2168,7 +2185,7 @@ void display_records(void)
         records_per_page = 1;
     }
 
-    int total_pages = (record_count + records_per_page - 1) / records_per_page;
+    int total_pages = (active_count + records_per_page - 1) / records_per_page;
     int current_page = 0;
     char status_message[128];
     status_message[0] = '\0';
@@ -2181,30 +2198,31 @@ void display_records(void)
         }
 
         int start_index = current_page * records_per_page;
-        if (start_index >= record_count)
+        if (start_index >= active_count)
         {
             current_page = (total_pages > 0) ? (total_pages - 1) : 0;
             start_index = current_page * records_per_page;
         }
 
         int end_index = start_index + records_per_page;
-        if (end_index > record_count)
+        if (end_index > active_count)
         {
-            end_index = record_count;
+            end_index = active_count;
         }
 
         printf("\n");
         print_record_table_header();
         for (int i = start_index; i < end_index; ++i)
         {
-            print_record_table_row(i);
+            int record_index = active_indices[i];
+            print_record_table_row(record_index);
         }
         print_record_table_footer();
 
         printf("Records %d-%d of %d | Page %d/%d\n",
                start_index + 1,
                end_index,
-               record_count,
+               active_count,
                current_page + 1,
                total_pages);
 
