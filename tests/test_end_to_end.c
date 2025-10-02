@@ -15,6 +15,7 @@ extern char machineName[MAX_RECORDS][MAX_NAME];
 extern char machineID[MAX_RECORDS][MAX_ID];
 extern char maintenanceDate[MAX_RECORDS][MAX_DATE];
 extern char maintenanceDetails[MAX_RECORDS][MAX_DETAILS];
+extern int recordActive[MAX_RECORDS];
 
 static int assertions_run = 0;
 static int assertions_failed = 0;
@@ -239,6 +240,7 @@ static void reset_in_memory_records(void)
     memset(machineID, 0, sizeof(machineID));
     memset(maintenanceDate, 0, sizeof(maintenanceDate));
     memset(maintenanceDetails, 0, sizeof(maintenanceDetails));
+    memset(recordActive, 0, sizeof(recordActive));
 }
 
 static int count_csv_data_lines(const char *path)
@@ -415,10 +417,10 @@ static void test_data_persistence_and_search(void)
     ASSERT_TRUE(file != NULL, "Created CSV fixture for search validation");
     if (file)
     {
-        fputs("MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n", file);
-        fputs("Hydraulic Press,HP-001,2025-08-01,Changed hydraulic fluid\n", file);
-        fputs("CNC Mill,CNC-12,2025-08-03,Recalibrated spindle\n", file);
-        fputs("3D Printer,PR-22,2025-08-04,Updated firmware\n", file);
+        fputs("MachineName,MachineID,MaintenanceDate,MaintenanceDetails,Active\n", file);
+        fputs("Hydraulic Press,HP-001,2025-08-01,Changed hydraulic fluid,1\n", file);
+        fputs("CNC Mill,CNC-12,2025-08-03,Recalibrated spindle,1\n", file);
+        fputs("3D Printer,PR-22,2025-08-04,Updated firmware,1\n", file);
         fclose(file);
     }
 
@@ -469,7 +471,7 @@ static void test_data_persistence_and_search(void)
 static void test_update_and_delete_workflow(void)
 {
     printf("\n=== END-TO-END TEST CASE 3: Update and Delete Workflow ===\n");
-    printf("📋 Scenario: Add → Save → Update → Delete → Reload\n\n");
+    printf("📋 Scenario: Add → Save → Update → Archive → Recover → Delete\n\n");
 
     const char *test_path = "tests/e2e-update-delete.csv";
     char original_path[CSV_PATH_MAX];
@@ -518,7 +520,7 @@ static void test_update_and_delete_workflow(void)
     ASSERT_EQ_INT(0, load_records(), "Load records after update");
     ASSERT_STREQ("Laser Cutter Pro", machineName[0], "Reloaded data reflects new values");
 
-    printf("   Step 5: Delete record via delete_record()\n");
+    printf("   Step 5: Archive record via delete_record()\n");
     {
         char input[] = "LC-07\n";
         int saved_fd = -1;
@@ -528,16 +530,69 @@ static void test_update_and_delete_workflow(void)
         restore_stdin(saved_fd, temp);
     }
 
-    ASSERT_EQ_INT(0, record_count, "Record count is zero after delete");
-    ASSERT_EQ_INT(0, save_all_records(), "Saved file after delete");
+    ASSERT_EQ_INT(1, record_count, "Record count remains 1 after soft delete");
+    ASSERT_EQ_INT(0, recordActive[0], "Record is marked as deleted after soft delete");
+    ASSERT_EQ_INT(0, save_all_records(), "Saved file after soft delete");
 
-    printf("   Step 6: Reload to confirm data removal\n");
+    printf("   Step 6: Reload to confirm archived status\n");
     reset_in_memory_records();
-    ASSERT_EQ_INT(0, load_records(), "Load file after deletion");
+    ASSERT_EQ_INT(0, load_records(), "Load file after soft deletion");
+    ASSERT_EQ_INT(1, record_count, "Record count persists after reload");
+    ASSERT_EQ_INT(0, recordActive[0], "Reloaded record remains archived");
+
+    printf("   Step 7: Recover record via manage_deleted_records()\n");
+    {
+        char input[] = "1\nLC-07\n\n";
+        int saved_fd = -1;
+        FILE *temp = NULL;
+        ASSERT_EQ_INT(0, redirect_stdin_from_string(input, &saved_fd, &temp), "Simulate recovery input");
+        manage_deleted_records();
+        restore_stdin(saved_fd, temp);
+    }
+
+    ASSERT_EQ_INT(1, recordActive[0], "Record is active after recovery");
+    ASSERT_EQ_INT(0, save_all_records(), "Saved file after recovery");
+
+    printf("   Step 8: Reload to confirm recovered status\n");
+    reset_in_memory_records();
+    ASSERT_EQ_INT(0, load_records(), "Load file after recovery");
+    ASSERT_EQ_INT(1, record_count, "Record count persists after recovery reload");
+    ASSERT_EQ_INT(1, recordActive[0], "Reloaded record remains active");
+
+    printf("   Step 9: Archive record again via delete_record()\n");
+    {
+        char input[] = "LC-07\n";
+        int saved_fd = -1;
+        FILE *temp = NULL;
+        ASSERT_EQ_INT(0, redirect_stdin_from_string(input, &saved_fd, &temp), "Simulate second archive input");
+        delete_record();
+        restore_stdin(saved_fd, temp);
+    }
+
+    ASSERT_EQ_INT(1, record_count, "Record count remains 1 after second soft delete");
+    ASSERT_EQ_INT(0, recordActive[0], "Record is marked as deleted before permanent removal");
+    ASSERT_EQ_INT(0, save_all_records(), "Saved file after second soft delete");
+
+    printf("   Step 10: Permanently delete record via manage_deleted_records()\n");
+    {
+        char input[] = "2\nLC-07\n\n";
+        int saved_fd = -1;
+        FILE *temp = NULL;
+        ASSERT_EQ_INT(0, redirect_stdin_from_string(input, &saved_fd, &temp), "Simulate permanent delete input");
+        manage_deleted_records();
+        restore_stdin(saved_fd, temp);
+    }
+
+    ASSERT_EQ_INT(0, record_count, "Record count is zero after permanent delete");
+    ASSERT_EQ_INT(0, save_all_records(), "Saved file after permanent delete");
+
+    printf("   Step 11: Reload to confirm data removal\n");
+    reset_in_memory_records();
+    ASSERT_EQ_INT(0, load_records(), "Load file after permanent deletion");
     ASSERT_EQ_INT(0, record_count, "Record count remains zero after reload");
 
     int csv_lines = count_csv_data_lines(test_path);
-    ASSERT_EQ_INT(0, csv_lines, "CSV file has no data rows after deletion");
+    ASSERT_EQ_INT(0, csv_lines, "CSV file has no data rows after permanent deletion");
 
     remove_file_if_exists(test_path);
     reset_in_memory_records();

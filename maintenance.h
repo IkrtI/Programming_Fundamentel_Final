@@ -33,6 +33,7 @@ void add_record(void);
 void search_records(void);
 void update_record(void);
 void delete_record(void);
+void manage_deleted_records(void);
 int safe_input(char *buffer, int size, const char *prompt);
 int prompt_with_validation(char *buffer, int size, const char *prompt,
                            int (*validator)(const char *), const char *error_message);

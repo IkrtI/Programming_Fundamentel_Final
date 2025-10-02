@@ -78,9 +78,10 @@ Machine Maintenance Manager
 3. Search record
 4. Update record
 5. Delete record
-6. Add-on tools
-7. Test program
-8. Exit
+6. Manage deleted records
+7. Add-on tools
+8. Test program
+9. Exit
 Enter your choice : 
 ```
 
@@ -90,15 +91,15 @@ Enter your choice :
 - **บรรทัดหัวตาราง:**
 
   ```csv
-  MachineName,MachineID,MaintenanceDate,MaintenanceDetails
+  MachineName,MachineID,MaintenanceDate,MaintenanceDetails,Active
   ```
 
 - **ตัวอย่างข้อมูล:**
 
   ```csv
-  Hydraulic Press,HP-001,2025-08-01,Changed hydraulic fluid
-  CNC Mill,CNC-12,2025-08-03,Spindle alignment and lubrication
-  Laser Cutter,LC-07,2025-08-05,Replaced air filter
+  Hydraulic Press,HP-001,2025-08-01,Changed hydraulic fluid,1
+  CNC Mill,CNC-12,2025-08-03,Spindle alignment and lubrication,1
+  Laser Cutter,LC-07,2025-08-05,Replaced air filter,1
   ```
 
 > หมายเหตุ: โครงสร้าง CSV ต้องตรงตามตัวอย่างเพื่อให้โปรแกรมอ่านและเขียนข้อมูลได้ถูกต้อง

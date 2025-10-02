@@ -293,7 +293,7 @@ static void test_ensure_csv_exists_creates_blank_when_declined(void)
         buffer[read] = '\0';
         fclose(created);
 
-        EXPECT_STREQ("MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n", buffer);
+        EXPECT_STREQ("MachineName,MachineID,MaintenanceDate,MaintenanceDetails,Active\n", buffer);
     }
 
     unlink(path);
