@@ -85,70 +85,8 @@ static void record_result(const char *scenario,
                        _exp ? _exp : "(null)", _act ? _act : "(null)");                           \
     } while (0)
 
-static void repeat_glyph(FILE *stream, const char *glyph, size_t count)
-{
-    for (size_t i = 0; i < count; ++i)
-    {
-        fputs(glyph, stream);
-    }
-}
-
-static void print_border(FILE *stream,
-                         const char *left,
-                         const char *mid,
-                         const char *right,
-                         size_t w1,
-                         size_t w2,
-                         size_t w3)
-{
-    fputs(left, stream);
-    repeat_glyph(stream, "─", w1 + 2);
-    fputs(mid, stream);
-    repeat_glyph(stream, "─", w2 + 2);
-    fputs(mid, stream);
-    repeat_glyph(stream, "─", w3 + 2);
-    fputs(right, stream);
-    fputc('\n', stream);
-}
-
 static void print_results_table(void)
 {
-    const char *scenario_header = "Scenario";
-    const char *step_header = "Step";
-    const char *detail_header = "Details";
-
-    size_t w_scenario = strlen(scenario_header);
-    size_t w_step = strlen(step_header);
-    size_t w_detail = strlen(detail_header);
-
-    for (size_t i = 0; i < result_count; ++i)
-    {
-        const scenario_result_t *row = &results[i];
-        size_t s_len = row->scenario ? strlen(row->scenario) : 0;
-        size_t step_len = row->step ? strlen(row->step) : 0;
-        size_t detail_len = strlen(row->detail);
-
-        if (s_len > w_scenario)
-        {
-            w_scenario = s_len;
-        }
-        if (step_len > w_step)
-        {
-            w_step = step_len;
-        }
-        if (detail_len > w_detail)
-        {
-            w_detail = detail_len;
-        }
-    }
-
-    print_border(stderr, "┌", "┬", "┐", w_scenario, w_step, w_detail);
-    fprintf(stderr, "│ %-*s │ %-*s │ %-*s │\n",
-            (int)w_scenario, scenario_header,
-            (int)w_step, step_header,
-            (int)w_detail, detail_header);
-    print_border(stderr, "├", "┼", "┤", w_scenario, w_step, w_detail);
-
     size_t passed = 0;
     for (size_t i = 0; i < result_count; ++i)
     {
@@ -158,16 +96,15 @@ static void print_results_table(void)
             ++passed;
         }
 
-        fprintf(stderr, "│ %-*s │ %-*s │ %s %-*s │\n",
-                (int)w_scenario, row->scenario ? row->scenario : "",
-                (int)w_step, row->step ? row->step : "",
-                row->passed ? "✓" : "✗",
-                (int)(w_detail - 2),
+        fprintf(stderr, "%s %s | %s | %s\n",
+                row->passed ? "[PASS]" : "[FAIL]",
+                row->scenario ? row->scenario : "",
+                row->step ? row->step : "",
                 row->detail);
     }
 
-    print_border(stderr, "└", "┴", "┘", w_scenario, w_step, w_detail);
-    fprintf(stderr, "Total: %zu, Passed: %zu, Failed: %zu\n", result_count, passed, result_count - passed);
+    fprintf(stderr, "Total: %zu, Passed: %zu, Failed: %zu\n",
+            result_count, passed, result_count - passed);
     fprintf(stderr, "-------\n");
 }
 
