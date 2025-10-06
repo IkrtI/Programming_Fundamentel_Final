@@ -1288,16 +1288,16 @@ static void resequence_machine_ids(void)
 static void print_record_table_header(void)
 {
     /* Top border */
-    printf("┌──────────────────────┬──────────────┬──────────────┬────────────────────────────────┐\n");
+    printf("+----------------------+--------------+--------------+--------------------------------+\n");
     /* Header titles */
-    printf("│ Machine Name         │ Machine ID   │ Date         │ Details                        │\n");
+    printf("| Machine Name         | Machine ID   | Date         | Details                        |\n");
     /* Header separator */
-    printf("├──────────────────────┼──────────────┼──────────────┼────────────────────────────────┤\n");
+    printf("+----------------------+--------------+--------------+--------------------------------+\n");
 }
 
 static void print_record_table_row(int index)
 {
-    printf("│ %-20.20s │ %-12.12s │ %-12.12s │ %-30.30s │\n",
+    printf("| %-20.20s | %-12.12s | %-12.12s | %-30.30s |\n",
            machineName[index],
            machineID[index],
            maintenanceDate[index],
@@ -1306,7 +1306,7 @@ static void print_record_table_row(int index)
 
 static void print_record_table_footer(void)
 {
-    printf("└──────────────────────┴──────────────┴──────────────┴────────────────────────────────┘\n");
+    printf("+----------------------+--------------+--------------+--------------------------------+\n");
 }
 
 static void print_record_preview_from_values(const char *name, const char *id,
