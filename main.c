@@ -13,6 +13,12 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <limits.h>
+#if defined(ENABLE_INTERNAL_TESTS)
+#include <stdarg.h>
+#if defined(_WIN32)
+#include <io.h>
+#endif
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -52,8 +58,12 @@ static record_result_t add_record_direct(const char *name, const char *id,
                                          const char *date, const char *details);
 static record_result_t delete_record_direct(const char *id);
 #ifndef UNIT_TEST
-static void run_unit_test_suite(void);
-static void run_end_to_end_suite(void);
+static int run_unit_test_suite(void);
+static int run_end_to_end_suite(void);
+#if defined(ENABLE_INTERNAL_TESTS)
+static int run_internal_unit_tests(void);
+static int run_internal_e2e_tests(void);
+#endif
 #endif
 
 static volatile sig_atomic_t interrupt_requested = 0;
@@ -1700,13 +1710,822 @@ int maintenance_set_csv_path(const char *path)
     return 0;
 }
 
+#if defined(ENABLE_INTERNAL_TESTS)
+
+#if defined(_WIN32)
+#define maintenance_dup _dup
+#define maintenance_dup2 _dup2
+#define maintenance_close _close
+#define maintenance_fileno _fileno
+#else
+#define maintenance_dup dup
+#define maintenance_dup2 dup2
+#define maintenance_close close
+#define maintenance_fileno fileno
+#endif
+
+static void reset_storage(void)
+{
+    memset(machineName, 0, sizeof(machineName));
+    memset(machineID, 0, sizeof(machineID));
+    memset(maintenanceDate, 0, sizeof(maintenanceDate));
+    memset(maintenanceDetails, 0, sizeof(maintenanceDetails));
+    record_count = 0;
+}
+
+static int redirect_stdin_from_string(const char *text, int *saved_fd, FILE **temp_file)
+{
+    if (!text)
+    {
+        return -1;
+    }
+
+    *saved_fd = maintenance_dup(maintenance_fileno(stdin));
+    if (*saved_fd < 0)
+    {
+        return -1;
+    }
+
+    *temp_file = tmpfile();
+    if (!*temp_file)
+    {
+        maintenance_close(*saved_fd);
+        *saved_fd = -1;
+        return -1;
+    }
+
+    fputs(text, *temp_file);
+    rewind(*temp_file);
+
+    if (maintenance_dup2(maintenance_fileno(*temp_file), maintenance_fileno(stdin)) != 0)
+    {
+        fclose(*temp_file);
+        *temp_file = NULL;
+        maintenance_close(*saved_fd);
+        *saved_fd = -1;
+        return -1;
+    }
+
+    return 0;
+}
+
+static void restore_stdin(int saved_fd, FILE *temp_file)
+{
+    if (saved_fd >= 0)
+    {
+        maintenance_dup2(saved_fd, maintenance_fileno(stdin));
+        maintenance_close(saved_fd);
+    }
+
+    if (temp_file)
+    {
+        fclose(temp_file);
+    }
+
+    clearerr(stdin);
+}
+
+/* -------------------------- Unit test harness -------------------------- */
+
+typedef struct
+{
+    const char *suite;
+    const char *name;
+    int passed;
+    char detail[160];
+} unit_test_result_t;
+
+static unit_test_result_t unit_results[128];
+static size_t unit_result_count = 0;
+
+static void unit_record_result(const char *suite,
+                               const char *name,
+                               int passed,
+                               const char *fmt,
+                               ...)
+{
+    if (unit_result_count >= (sizeof(unit_results) / sizeof(unit_results[0])))
+    {
+        return;
+    }
+
+    unit_test_result_t *entry = &unit_results[unit_result_count++];
+    entry->suite = suite;
+    entry->name = name;
+    entry->passed = passed;
+
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(entry->detail, sizeof(entry->detail), fmt, args);
+    va_end(args);
+}
+
+#define record_result unit_record_result
+#define ASSERT_TRUE(SUITE, NAME, EXPR, FMT, ...)                                                   \
+    do                                                                                             \
+    {                                                                                              \
+        int _ok = (EXPR);                                                                          \
+        record_result((SUITE), (NAME), _ok, (FMT), ##__VA_ARGS__);                                 \
+    } while (0)
+
+#define ASSERT_EQ_INT(SUITE, NAME, EXPECTED, ACTUAL)                                               \
+    do                                                                                             \
+    {                                                                                              \
+        int _exp = (EXPECTED);                                                                     \
+        int _act = (ACTUAL);                                                                       \
+        int _ok = (_exp == _act);                                                                  \
+        record_result((SUITE), (NAME), _ok, "expected %d, actual %d", _exp, _act);                 \
+    } while (0)
+
+#define ASSERT_STREQ(SUITE, NAME, EXPECTED, ACTUAL)                                                \
+    do                                                                                             \
+    {                                                                                              \
+        const char *_exp = (EXPECTED);                                                             \
+        const char *_act = (ACTUAL);                                                               \
+        int _ok = ((_exp == NULL && _act == NULL) ||                                               \
+                    (_exp != NULL && _act != NULL && strcmp(_exp, _act) == 0));                    \
+        record_result((SUITE), (NAME), _ok, "expected '%s', actual '%s'",                          \
+                       _exp ? _exp : "(null)", _act ? _act : "(null)");                         \
+    } while (0)
+
+static void print_unit_results_table(void)
+{
+    size_t passed = 0;
+    for (size_t i = 0; i < unit_result_count; ++i)
+    {
+        const unit_test_result_t *row = &unit_results[i];
+        if (row->passed)
+        {
+            ++passed;
+        }
+        printf("[%s] %s — %s %s\n",
+               row->suite ? row->suite : "",
+               row->name ? row->name : "",
+               row->passed ? "✓" : "✗",
+               row->detail);
+    }
+
+    printf("Total: %zu, Passed: %zu, Failed: %zu\n",
+           unit_result_count, passed, unit_result_count - passed);
+    puts("-------");
+}
+
+static void test_csv_path_management(void)
+{
+    const char *suite = "Storage";
+    char original[CSV_PATH_MAX];
+    snprintf(original, sizeof(original), "%s", maintenance_get_csv_path());
+
+    const char *path = "tests/unit_path_primary.csv";
+    remove(path);
+
+    ASSERT_TRUE(suite, "set csv path valid", maintenance_set_csv_path(path) == 0,
+                "set path returned %d", maintenance_set_csv_path(path));
+    ASSERT_STREQ(suite, "get csv path", path, maintenance_get_csv_path());
+
+    ASSERT_TRUE(suite, "reject null path", maintenance_set_csv_path(NULL) != 0,
+                "NULL path should fail");
+
+    ASSERT_TRUE(suite, "restore path", maintenance_set_csv_path(original) == 0,
+                "restore returned %d", maintenance_set_csv_path(original));
+}
+
+static void test_ensure_csv_exists_blank(void)
+{
+    const char *suite = "Storage";
+    char original[CSV_PATH_MAX];
+    snprintf(original, sizeof(original), "%s", maintenance_get_csv_path());
+
+    const char *path = "tests/unit_blank.csv";
+    remove(path);
+    maintenance_set_csv_path(path);
+
+    int saved_fd = -1;
+    FILE *temp = NULL;
+    ASSERT_TRUE(suite, "inject decline input",
+                redirect_stdin_from_string("n\n", &saved_fd, &temp) == 0,
+                "stdin redirected");
+
+    int ensure_status = ensure_csv_exists();
+    restore_stdin(saved_fd, temp);
+    ASSERT_TRUE(suite, "ensure_csv_exists blank", ensure_status == 0,
+                "ensure status %d", ensure_status);
+
+    FILE *f = fopen(path, "r");
+    ASSERT_TRUE(suite, "blank file created", f != NULL,
+                "blank csv present");
+    if (f)
+    {
+        char buffer[256] = {0};
+        size_t read = fread(buffer, 1, sizeof(buffer) - 1, f);
+        buffer[read] = '\0';
+        fclose(f);
+        ASSERT_STREQ(suite, "blank header",
+                     "MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n",
+                     buffer);
+    }
+
+    remove(path);
+    maintenance_set_csv_path(original);
+}
+
+static void test_save_and_load_round_trip(void)
+{
+    const char *suite = "Storage";
+    char original[CSV_PATH_MAX];
+    snprintf(original, sizeof(original), "%s", maintenance_get_csv_path());
+
+    const char *path = "tests/unit_round_trip.csv";
+    remove(path);
+    maintenance_set_csv_path(path);
+
+    reset_storage();
+    snprintf(machineName[0], MAX_NAME, "%s", "Hydraulic Press");
+    snprintf(machineID[0], MAX_ID, "%s", "HP-001");
+    snprintf(maintenanceDate[0], MAX_DATE, "%s", "2025-08-01");
+    snprintf(maintenanceDetails[0], MAX_DETAILS, "%s", "Changed hydraulic fluid");
+    record_count = 1;
+
+    ASSERT_TRUE(suite, "save_all_records", save_all_records() == 0,
+                "save returned %d", save_all_records());
+
+    reset_storage();
+    ASSERT_TRUE(suite, "load_records", load_records() == 0,
+                "load returned %d", load_records());
+    ASSERT_EQ_INT(suite, "record count", 1, record_count);
+    ASSERT_STREQ(suite, "machine name", "Hydraulic Press", machineName[0]);
+    ASSERT_STREQ(suite, "machine id", "HP-001", machineID[0]);
+
+    remove(path);
+    maintenance_set_csv_path(original);
+    reset_storage();
+}
+
+static void test_storage_capacity_guard(void)
+{
+    const char *suite = "Storage";
+    reset_storage();
+    record_count = MAX_RECORDS;
+    ASSERT_TRUE(suite, "storage full", is_record_storage_full(),
+                "expected storage to be full");
+}
+
+static int run_internal_unit_tests(void)
+{
+    unit_result_count = 0;
+
+    test_csv_path_management();
+    test_ensure_csv_exists_blank();
+    test_save_and_load_round_trip();
+    test_storage_capacity_guard();
+
+    print_unit_results_table();
+
+    size_t failures = 0;
+    for (size_t i = 0; i < unit_result_count; ++i)
+    {
+        if (!unit_results[i].passed)
+        {
+            ++failures;
+        }
+    }
+
+    return failures == 0 ? 0 : 1;
+}
+
+#undef ASSERT_STREQ
+#undef ASSERT_EQ_INT
+#undef ASSERT_TRUE
+#undef record_result
+
+/* ----------------------- End-to-end test harness ----------------------- */
+
+typedef struct
+{
+    const char *scenario;
+    const char *step;
+    int passed;
+    char detail[256];
+} e2e_result_t;
+
+static e2e_result_t e2e_results[512];
+static size_t e2e_result_count = 0;
+
+static void e2e_record_result(const char *scenario,
+                              const char *step,
+                              int passed,
+                              const char *fmt,
+                              ...)
+{
+    if (e2e_result_count >= (sizeof(e2e_results) / sizeof(e2e_results[0])))
+    {
+        return;
+    }
+
+    e2e_result_t *entry = &e2e_results[e2e_result_count++];
+    entry->scenario = scenario;
+    entry->step = step;
+    entry->passed = passed;
+
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(entry->detail, sizeof(entry->detail), fmt, args);
+    va_end(args);
+}
+
+#define record_result e2e_record_result
+#define SCENARIO_ASSERT_TRUE(SC, STEP, EXPR, FMT, ...)                                              \
+    do                                                                                              \
+    {                                                                                               \
+        int _ok = (EXPR);                                                                           \
+        record_result((SC), (STEP), _ok, (FMT), ##__VA_ARGS__);                                     \
+    } while (0)
+
+#define SCENARIO_ASSERT_EQ_INT(SC, STEP, EXPECTED, ACTUAL)                                          \
+    do                                                                                              \
+    {                                                                                               \
+        int _exp = (EXPECTED);                                                                      \
+        int _act = (ACTUAL);                                                                        \
+        int _ok = (_exp == _act);                                                                   \
+        record_result((SC), (STEP), _ok, "expected %d, actual %d", _exp, _act);                     \
+    } while (0)
+
+#define SCENARIO_ASSERT_STREQ(SC, STEP, EXPECTED, ACTUAL)                                           \
+    do                                                                                              \
+    {                                                                                               \
+        const char *_exp = (EXPECTED);                                                              \
+        const char *_act = (ACTUAL);                                                                \
+        int _ok = ((_exp == NULL && _act == NULL) ||                                                \
+                    (_exp != NULL && _act != NULL && strcmp(_exp, _act) == 0));                     \
+        record_result((SC), (STEP), _ok, "expected '%s', actual '%s'",                              \
+                       _exp ? _exp : "(null)", _act ? _act : "(null)");                          \
+    } while (0)
+
+static void print_e2e_results_table(void)
+{
+    size_t passed = 0;
+    for (size_t i = 0; i < e2e_result_count; ++i)
+    {
+        const e2e_result_t *row = &e2e_results[i];
+        if (row->passed)
+        {
+            ++passed;
+        }
+
+        fprintf(stderr, "%s %s | %s | %s\n",
+                row->passed ? "[PASS]" : "[FAIL]",
+                row->scenario ? row->scenario : "",
+                row->step ? row->step : "",
+                row->detail);
+    }
+
+    fprintf(stderr, "Total: %zu, Passed: %zu, Failed: %zu\n",
+            e2e_result_count, passed, e2e_result_count - passed);
+    fprintf(stderr, "-------\n");
+}
+
+static int feed_input(const char *script, FILE **out_temp)
+{
+    if (!script)
+    {
+        return -1;
+    }
+
+    int saved_fd = maintenance_dup(maintenance_fileno(stdin));
+    if (saved_fd < 0)
+    {
+        return -1;
+    }
+
+    FILE *temp = tmpfile();
+    if (!temp)
+    {
+        maintenance_close(saved_fd);
+        return -1;
+    }
+
+    fputs(script, temp);
+    rewind(temp);
+
+    if (maintenance_dup2(maintenance_fileno(temp), maintenance_fileno(stdin)) != 0)
+    {
+        fclose(temp);
+        maintenance_close(saved_fd);
+        return -1;
+    }
+
+    if (out_temp)
+    {
+        *out_temp = temp;
+    }
+    else
+    {
+        fclose(temp);
+    }
+
+    return saved_fd;
+}
+
+static int start_stdout_capture(FILE **capture_file, int *saved_fd)
+{
+    if (!capture_file || !saved_fd)
+    {
+        return -1;
+    }
+
+    fflush(stdout);
+
+    *saved_fd = maintenance_dup(maintenance_fileno(stdout));
+    if (*saved_fd < 0)
+    {
+        return -1;
+    }
+
+    *capture_file = tmpfile();
+    if (!*capture_file)
+    {
+        maintenance_close(*saved_fd);
+        *saved_fd = -1;
+        return -1;
+    }
+
+    if (maintenance_dup2(maintenance_fileno(*capture_file), maintenance_fileno(stdout)) != 0)
+    {
+        fclose(*capture_file);
+        *capture_file = NULL;
+        maintenance_close(*saved_fd);
+        *saved_fd = -1;
+        return -1;
+    }
+
+    return 0;
+}
+
+static char *stop_stdout_capture(FILE *capture_file, int saved_fd)
+{
+    if (capture_file)
+    {
+        fflush(stdout);
+    }
+
+    if (saved_fd >= 0)
+    {
+        maintenance_dup2(saved_fd, maintenance_fileno(stdout));
+        maintenance_close(saved_fd);
+    }
+
+    if (!capture_file)
+    {
+        return NULL;
+    }
+
+    long size = ftell(capture_file);
+    if (size < 0)
+    {
+        fclose(capture_file);
+        return NULL;
+    }
+
+    rewind(capture_file);
+    char *buffer = malloc((size_t)size + 1);
+    if (!buffer)
+    {
+        fclose(capture_file);
+        return NULL;
+    }
+
+    size_t read = fread(buffer, 1, (size_t)size, capture_file);
+    buffer[read] = '\0';
+    fclose(capture_file);
+    return buffer;
+}
+
+static int count_csv_rows(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f)
+    {
+        return -1;
+    }
+
+    int lines = 0;
+    int ch;
+    int header_skipped = 0;
+
+    while ((ch = fgetc(f)) != EOF)
+    {
+        if (ch == '\n')
+        {
+            if (!header_skipped)
+            {
+                header_skipped = 1;
+            }
+            else
+            {
+                ++lines;
+            }
+        }
+    }
+
+    fclose(f);
+    return lines;
+}
+
+static void discard_and_free(char *buffer)
+{
+    if (buffer)
+    {
+        free(buffer);
+    }
+}
+
+static int contains_case_insensitive(const char *haystack, const char *needle)
+{
+    if (!haystack || !needle)
+    {
+        return 0;
+    }
+
+    size_t n_len = strlen(needle);
+    if (n_len == 0)
+    {
+        return 1;
+    }
+
+    for (const char *p = haystack; *p; ++p)
+    {
+        size_t matched = 0;
+        while (needle[matched] && p[matched] &&
+               tolower((unsigned char)p[matched]) == tolower((unsigned char)needle[matched]))
+        {
+            ++matched;
+        }
+        if (matched == n_len)
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void scenario_complete_workflow(void)
+{
+    const char *scenario = "Complete Workflow";
+    char original[CSV_PATH_MAX];
+    snprintf(original, sizeof(original), "%s", maintenance_get_csv_path());
+
+    const char *path = "tests/e2e-workflow.csv";
+    remove(path);
+    maintenance_set_csv_path(path);
+    reset_storage();
+
+    const char *record_inputs[] = {
+        "Hydraulic Press\n\n2025-08-01\nChanged hydraulic fluid\ny\n",
+        "CNC Mill\n\n2025-08-03\nRecalibrated spindle\ny\n",
+        "Laser Cutter\n\n2025-08-05\nReplaced air filter\ny\n"};
+
+    for (int i = 0; i < 3; ++i)
+    {
+        FILE *input_temp = NULL;
+        int saved_fd = feed_input(record_inputs[i], &input_temp);
+        SCENARIO_ASSERT_TRUE(scenario, "inject add_record input", saved_fd >= 0,
+                              "prepared stdin for record %d", i + 1);
+
+        FILE *output_capture = NULL;
+        int saved_stdout = -1;
+        start_stdout_capture(&output_capture, &saved_stdout);
+        if (saved_fd >= 0)
+        {
+            add_record();
+            restore_stdin(saved_fd, input_temp);
+        }
+        else
+        {
+            restore_stdin(saved_fd, input_temp);
+        }
+        discard_and_free(stop_stdout_capture(output_capture, saved_stdout));
+    }
+
+    SCENARIO_ASSERT_EQ_INT(scenario, "records after add", 3, record_count);
+
+    int save_status = save_all_records();
+    SCENARIO_ASSERT_TRUE(scenario, "save_all_records", save_status == 0,
+                          "save_all_records returned %d", save_status);
+
+    SCENARIO_ASSERT_EQ_INT(scenario, "csv row count", 3, count_csv_rows(path));
+
+    reset_storage();
+    int load_status = load_records();
+    SCENARIO_ASSERT_TRUE(scenario, "load_records", load_status == 0,
+                          "load_records returned %d", load_status);
+    SCENARIO_ASSERT_EQ_INT(scenario, "records after reload", 3, record_count);
+    SCENARIO_ASSERT_STREQ(scenario, "first record name", "Hydraulic Press", machineName[0]);
+
+    remove(path);
+    maintenance_set_csv_path(original);
+    reset_storage();
+}
+
+static void scenario_data_persistence_and_search(void)
+{
+    const char *scenario = "Persistence & Search";
+    char original[CSV_PATH_MAX];
+    snprintf(original, sizeof(original), "%s", maintenance_get_csv_path());
+
+    const char *path = "tests/e2e-search.csv";
+    FILE *f = fopen(path, "w");
+    if (f)
+    {
+        fprintf(f, "MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n");
+        fprintf(f, "Precision Lathe,LT-10,2024-01-15,Align headstock\n");
+        fprintf(f, "Hydraulic Press,HP-99,2024-02-20,Replace seals\n");
+        fprintf(f, "Laser Cutter,LC-07,2024-03-05,Clean optics\n");
+        fclose(f);
+    }
+
+    maintenance_set_csv_path(path);
+    reset_storage();
+
+    int load_status = load_records();
+    SCENARIO_ASSERT_TRUE(scenario, "load_records fixture", load_status == 0,
+                          "load_records returned %d", load_status);
+    SCENARIO_ASSERT_EQ_INT(scenario, "fixture record count", 3, record_count);
+
+    int has_lathe = 0;
+    int has_lc07 = 0;
+    int found_unknown = 0;
+    for (int i = 0; i < record_count; ++i)
+    {
+        if (contains_case_insensitive(machineName[i], "Lathe"))
+        {
+            has_lathe = 1;
+        }
+        if (strcmp(machineID[i], "LC-07") == 0)
+        {
+            has_lc07 = 1;
+        }
+        if (contains_case_insensitive(machineName[i], "Unknown") ||
+            contains_case_insensitive(machineID[i], "Unknown"))
+        {
+            found_unknown = 1;
+        }
+    }
+
+    SCENARIO_ASSERT_TRUE(scenario, "search by name", has_lathe, "Lathe fragment present in dataset");
+    SCENARIO_ASSERT_TRUE(scenario, "search by id", has_lc07, "LC-07 ID present in dataset");
+    SCENARIO_ASSERT_TRUE(scenario, "search not found", !found_unknown, "No record contains 'Unknown'");
+
+    const char *search_inputs[] = {"Lathe\n", "LC-07\n", "Unknown\n"};
+    for (int i = 0; i < 3; ++i)
+    {
+        FILE *input_temp = NULL;
+        int saved_fd = feed_input(search_inputs[i], &input_temp);
+        FILE *output_capture = NULL;
+        int saved_stdout = -1;
+        start_stdout_capture(&output_capture, &saved_stdout);
+        search_records();
+        discard_and_free(stop_stdout_capture(output_capture, saved_stdout));
+        restore_stdin(saved_fd, input_temp);
+    }
+
+    remove(path);
+    maintenance_set_csv_path(original);
+    reset_storage();
+}
+
+static void scenario_update_and_delete(void)
+{
+    const char *scenario = "Update & Delete";
+    char original[CSV_PATH_MAX];
+    snprintf(original, sizeof(original), "%s", maintenance_get_csv_path());
+
+    const char *path = "tests/e2e-update.csv";
+    remove(path);
+    maintenance_set_csv_path(path);
+    reset_storage();
+
+    FILE *input_temp = NULL;
+    int saved_fd = feed_input("Laser Cutter Pro\n\n2025-08-15\nReplace focusing lens\ny\n", &input_temp);
+    FILE *output_capture = NULL;
+    int saved_stdout = -1;
+    start_stdout_capture(&output_capture, &saved_stdout);
+    if (saved_fd >= 0)
+    {
+        add_record();
+        restore_stdin(saved_fd, input_temp);
+    }
+    else
+    {
+        restore_stdin(saved_fd, input_temp);
+    }
+    discard_and_free(stop_stdout_capture(output_capture, saved_stdout));
+
+    SCENARIO_ASSERT_EQ_INT(scenario, "record_count after add", 1, record_count);
+
+    int save_status = save_all_records();
+    SCENARIO_ASSERT_TRUE(scenario, "save after add", save_status == 0,
+                          "save_all_records returned %d", save_status);
+
+    input_temp = NULL;
+    saved_fd = feed_input("1\nNew Laser Cutter\n2025-09-01\nRefined optics\ny\n", &input_temp);
+    output_capture = NULL;
+    saved_stdout = -1;
+    start_stdout_capture(&output_capture, &saved_stdout);
+    update_record();
+    discard_and_free(stop_stdout_capture(output_capture, saved_stdout));
+    restore_stdin(saved_fd, input_temp);
+
+    SCENARIO_ASSERT_STREQ(scenario, "updated name", "New Laser Cutter", machineName[0]);
+    SCENARIO_ASSERT_STREQ(scenario, "updated date", "2025-09-01", maintenanceDate[0]);
+
+    save_status = save_all_records();
+    SCENARIO_ASSERT_TRUE(scenario, "save after update", save_status == 0,
+                          "save_all_records returned %d", save_status);
+
+    input_temp = NULL;
+    saved_fd = feed_input("1\ny\n", &input_temp);
+    output_capture = NULL;
+    saved_stdout = -1;
+    start_stdout_capture(&output_capture, &saved_stdout);
+    delete_record();
+    discard_and_free(stop_stdout_capture(output_capture, saved_stdout));
+    restore_stdin(saved_fd, input_temp);
+
+    save_status = save_all_records();
+    SCENARIO_ASSERT_TRUE(scenario, "save after delete", save_status == 0,
+                          "save_all_records returned %d", save_status);
+
+    reset_storage();
+    int load_status = load_records();
+    SCENARIO_ASSERT_TRUE(scenario, "reload after delete", load_status == 0,
+                          "load_records returned %d", load_status);
+    SCENARIO_ASSERT_EQ_INT(scenario, "record count after delete", 0, record_count);
+
+    remove(path);
+    maintenance_set_csv_path(original);
+    reset_storage();
+}
+
+static int run_internal_e2e_tests(void)
+{
+    e2e_result_count = 0;
+
+    scenario_complete_workflow();
+    scenario_data_persistence_and_search();
+    scenario_update_and_delete();
+
+    print_e2e_results_table();
+
+    size_t failures = 0;
+    for (size_t i = 0; i < e2e_result_count; ++i)
+    {
+        if (!e2e_results[i].passed)
+        {
+            ++failures;
+        }
+    }
+
+    return failures == 0 ? 0 : 1;
+}
+
+#undef SCENARIO_ASSERT_STREQ
+#undef SCENARIO_ASSERT_EQ_INT
+#undef SCENARIO_ASSERT_TRUE
+#undef record_result
+
+#undef maintenance_fileno
+#undef maintenance_close
+#undef maintenance_dup2
+#undef maintenance_dup
+
+#endif /* ENABLE_INTERNAL_TESTS */
+
 #ifndef UNIT_TEST
 void display_menu(void);
 int read_menu_choice(void);
 
-int main(void)
+int main(int argc, char *argv[])
 {
     int choice = 0;
+
+#if defined(ENABLE_INTERNAL_TESTS)
+    if (argc > 1)
+    {
+        if (strcmp(argv[1], "--run-unit-tests") == 0)
+        {
+            int status = run_unit_test_suite();
+            return exit_program(status == 0 ? 0 : 1);
+        }
+        if (strcmp(argv[1], "--run-e2e-tests") == 0)
+        {
+            int status = run_end_to_end_suite();
+            return exit_program(status == 0 ? 0 : 1);
+        }
+    }
+#else
+    (void)argc;
+    (void)argv;
+#endif
 
 #if !defined(_WIN32)
     if (configure_terminal_shortcuts() != 0)
@@ -1812,10 +2631,10 @@ int main(void)
             handle_addon_menu();
             break;
         case 7:
-            run_unit_test_suite();
+            (void)run_unit_test_suite();
             break;
         case 8:
-            run_end_to_end_suite();
+            (void)run_end_to_end_suite();
             break;
         case 9:
             printf("Exiting...\n");
@@ -1856,48 +2675,50 @@ void display_menu(void)
     printf("9. Exit\n");
 }
 
-static void run_unit_test_suite(void)
+static int run_unit_test_suite(void)
 {
-#ifdef _WIN32
-    const char *command = "cmd /c tests\\run_unit_tests.bat";
-#else
-    const char *command = "sh ./tests/run_unit_tests.sh";
-#endif
-
+#if defined(ENABLE_INTERNAL_TESTS)
     printf("\nRunning unit test suite...\n");
-    int status = system(command);
-    if (status == -1)
+    int status = run_internal_unit_tests();
+    if (status == 0)
     {
-        printf("Unable to launch unit tests. Ensure the test runner exists at './tests/run_unit_tests.sh'.\n");
-        return;
+        printf("Unit test suite completed successfully.\n");
     }
-
-    if (status != 0)
+    else
     {
-        printf("Unit test suite completed with exit code %d.\n", status);
+        printf("Unit test suite completed with failures.\n");
     }
+    fflush(stdout);
+    fflush(stderr);
+    return status;
+#else
+    printf("Unit test suite is not available in this build. Rebuild with ENABLE_INTERNAL_TESTS defined.\n");
+    return -1;
+#endif
 }
 
-static void run_end_to_end_suite(void)
+static int run_end_to_end_suite(void)
 {
-#ifdef _WIN32
-    const char *command = "cmd /c tests\\run_e2e_tests.bat";
-#else
-    const char *command = "sh ./tests/run_e2e_tests.sh";
-#endif
-
+#if defined(ENABLE_INTERNAL_TESTS)
     printf("\nRunning end-to-end tests...\n");
-    int status = system(command);
-    if (status == -1)
+    int status = run_internal_e2e_tests();
+    if (status == 0)
     {
-        printf("Unable to launch end-to-end tests. Ensure the test runner exists at './tests/run_e2e_tests.sh'.\n");
-        return;
+        printf("End-to-end tests completed successfully.\n");
+        fprintf(stderr, "End-to-end tests completed successfully.\n");
     }
-
-    if (status != 0)
+    else
     {
-        printf("End-to-end test suite completed with exit code %d.\n", status);
+        printf("End-to-end tests completed with failures.\n");
+        fprintf(stderr, "End-to-end tests completed with failures.\n");
     }
+    fflush(stdout);
+    fflush(stderr);
+    return status;
+#else
+    printf("End-to-end tests are not available in this build. Rebuild with ENABLE_INTERNAL_TESTS defined.\n");
+    return -1;
+#endif
 }
 #endif
 
