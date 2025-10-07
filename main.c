@@ -2380,11 +2380,18 @@ static void scenario_data_persistence_and_search(void)
     {
         FILE *input_temp = NULL;
         int saved_fd = feed_input(search_inputs[i], &input_temp);
-        FILE *output_capture = NULL;
-        int saved_stdout = -1;
-        start_stdout_capture(&output_capture, &saved_stdout);
-        search_records();
-        discard_and_free(stop_stdout_capture(output_capture, saved_stdout));
+        SCENARIO_ASSERT_TRUE(scenario, "inject search input", saved_fd >= 0,
+                              "prepared stdin for search %d", i + 1);
+
+        if (saved_fd >= 0)
+        {
+            FILE *output_capture = NULL;
+            int saved_stdout = -1;
+            start_stdout_capture(&output_capture, &saved_stdout);
+            search_records();
+            discard_and_free(stop_stdout_capture(output_capture, saved_stdout));
+        }
+
         restore_stdin(saved_fd, input_temp);
     }
 
@@ -2428,11 +2435,16 @@ static void scenario_update_and_delete(void)
 
     input_temp = NULL;
     saved_fd = feed_input("1\nNew Laser Cutter\n2025-09-01\nRefined optics\ny\n", &input_temp);
-    output_capture = NULL;
-    saved_stdout = -1;
-    start_stdout_capture(&output_capture, &saved_stdout);
-    update_record();
-    discard_and_free(stop_stdout_capture(output_capture, saved_stdout));
+    SCENARIO_ASSERT_TRUE(scenario, "inject update input", saved_fd >= 0,
+                          "prepared stdin for update");
+    if (saved_fd >= 0)
+    {
+        output_capture = NULL;
+        saved_stdout = -1;
+        start_stdout_capture(&output_capture, &saved_stdout);
+        update_record();
+        discard_and_free(stop_stdout_capture(output_capture, saved_stdout));
+    }
     restore_stdin(saved_fd, input_temp);
 
     SCENARIO_ASSERT_STREQ(scenario, "updated name", "New Laser Cutter", machineName[0]);
@@ -2444,11 +2456,16 @@ static void scenario_update_and_delete(void)
 
     input_temp = NULL;
     saved_fd = feed_input("1\ny\n", &input_temp);
-    output_capture = NULL;
-    saved_stdout = -1;
-    start_stdout_capture(&output_capture, &saved_stdout);
-    delete_record();
-    discard_and_free(stop_stdout_capture(output_capture, saved_stdout));
+    SCENARIO_ASSERT_TRUE(scenario, "inject delete input", saved_fd >= 0,
+                          "prepared stdin for delete");
+    if (saved_fd >= 0)
+    {
+        output_capture = NULL;
+        saved_stdout = -1;
+        start_stdout_capture(&output_capture, &saved_stdout);
+        delete_record();
+        discard_and_free(stop_stdout_capture(output_capture, saved_stdout));
+    }
     restore_stdin(saved_fd, input_temp);
 
     save_status = save_all_records();
