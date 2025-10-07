@@ -1785,6 +1785,83 @@ static void restore_stdin(int saved_fd, FILE *temp_file)
     clearerr(stdin);
 }
 
+static int redirect_stdout_to_temp(int *saved_fd, FILE **temp_file)
+{
+    if (!saved_fd || !temp_file)
+    {
+        return -1;
+    }
+
+    *saved_fd = maintenance_dup(maintenance_fileno(stdout));
+    if (*saved_fd < 0)
+    {
+        return -1;
+    }
+
+    *temp_file = tmpfile();
+    if (!*temp_file)
+    {
+        maintenance_close(*saved_fd);
+        *saved_fd = -1;
+        return -1;
+    }
+
+    fflush(stdout);
+
+    if (maintenance_dup2(maintenance_fileno(*temp_file), maintenance_fileno(stdout)) == -1)
+    {
+        fclose(*temp_file);
+        *temp_file = NULL;
+        maintenance_close(*saved_fd);
+        *saved_fd = -1;
+        return -1;
+    }
+
+    return 0;
+}
+
+static int read_captured_stdout(FILE *temp_file, char *buffer, size_t size)
+{
+    if (!temp_file || !buffer || size == 0)
+    {
+        return -1;
+    }
+
+    fflush(stdout);
+    fflush(temp_file);
+
+    long original = ftell(temp_file);
+    if (original < 0)
+    {
+        original = 0;
+    }
+
+    rewind(temp_file);
+
+    size_t read = fread(buffer, 1, size - 1, temp_file);
+    buffer[read] = '\0';
+
+    fseek(temp_file, original, SEEK_SET);
+
+    return 0;
+}
+
+static void restore_stdout(int saved_fd, FILE *temp_file)
+{
+    fflush(stdout);
+
+    if (saved_fd >= 0)
+    {
+        maintenance_dup2(saved_fd, maintenance_fileno(stdout));
+        maintenance_close(saved_fd);
+    }
+
+    if (temp_file)
+    {
+        fclose(temp_file);
+    }
+}
+
 /* -------------------------- Unit test harness -------------------------- */
 
 typedef struct
@@ -1970,6 +2047,230 @@ static void test_storage_capacity_guard(void)
                 "expected storage to be full");
 }
 
+static void test_display_records_outputs_content(void)
+{
+    const char *suite = "Main Actions";
+    reset_storage();
+    exit_requested = 0;
+    interrupt_requested = 0;
+
+    snprintf(machineName[0], MAX_NAME, "%s", "Hydraulic Press");
+    snprintf(machineID[0], MAX_ID, "%s", "1");
+    snprintf(maintenanceDate[0], MAX_DATE, "%s", "2025-08-01");
+    snprintf(maintenanceDetails[0], MAX_DETAILS, "%s", "Changed hydraulic fluid");
+    record_count = 1;
+
+    int saved_stdout = -1;
+    FILE *stdout_temp = NULL;
+    int capture_status = redirect_stdout_to_temp(&saved_stdout, &stdout_temp);
+    ASSERT_TRUE(suite, "display stdout redirect", capture_status == 0,
+                "redirect status %d", capture_status);
+
+    if (capture_status == 0)
+    {
+        display_records();
+
+        char output[1024];
+        int read_status = read_captured_stdout(stdout_temp, output, sizeof(output));
+        ASSERT_TRUE(suite, "display capture readable", read_status == 0,
+                    "read status %d", read_status);
+        if (read_status == 0)
+        {
+            ASSERT_TRUE(suite, "display lists machine", strstr(output, "Hydraulic Press") != NULL,
+                        "output: %s", output);
+        }
+    }
+
+    restore_stdout(saved_stdout, stdout_temp);
+    reset_storage();
+}
+
+static void test_add_record_interactive_success(void)
+{
+    const char *suite = "Main Actions";
+    reset_storage();
+    exit_requested = 0;
+    interrupt_requested = 0;
+
+    const char *input = "Hydraulic Press\n\n2025-10-10\nRoutine maintenance\nY\n";
+    int saved_stdin = -1;
+    FILE *stdin_temp = NULL;
+    int stdin_status = redirect_stdin_from_string(input, &saved_stdin, &stdin_temp);
+    ASSERT_TRUE(suite, "add record stdin redirect", stdin_status == 0,
+                "redirect status %d", stdin_status);
+
+    int saved_stdout = -1;
+    FILE *stdout_temp = NULL;
+    int stdout_status = redirect_stdout_to_temp(&saved_stdout, &stdout_temp);
+    ASSERT_TRUE(suite, "add record stdout redirect", stdout_status == 0,
+                "redirect status %d", stdout_status);
+
+    if (stdin_status == 0)
+    {
+        add_record();
+    }
+
+    if (stdout_status == 0)
+    {
+        char output[1024];
+        int read_status = read_captured_stdout(stdout_temp, output, sizeof(output));
+        ASSERT_TRUE(suite, "add record capture readable", read_status == 0,
+                    "read status %d", read_status);
+        if (read_status == 0)
+        {
+            ASSERT_TRUE(suite, "add record confirmation", strstr(output, "Record added") != NULL,
+                        "output: %s", output);
+        }
+    }
+
+    restore_stdout(saved_stdout, stdout_temp);
+    restore_stdin(saved_stdin, stdin_temp);
+
+    ASSERT_EQ_INT(suite, "record count after add", 1, record_count);
+    ASSERT_STREQ(suite, "stored name after add", "Hydraulic Press", machineName[0]);
+    ASSERT_STREQ(suite, "stored id after add", "1", machineID[0]);
+    ASSERT_STREQ(suite, "stored date after add", "2025-10-10", maintenanceDate[0]);
+    ASSERT_STREQ(suite, "stored details after add", "Routine maintenance", maintenanceDetails[0]);
+
+    reset_storage();
+}
+
+static void test_search_records_finds_matches(void)
+{
+    const char *suite = "Main Actions";
+    reset_storage();
+    exit_requested = 0;
+    interrupt_requested = 0;
+
+    snprintf(machineName[0], MAX_NAME, "%s", "Hydraulic Press");
+    snprintf(machineID[0], MAX_ID, "%s", "1");
+    snprintf(maintenanceDate[0], MAX_DATE, "%s", "2025-08-01");
+    snprintf(maintenanceDetails[0], MAX_DETAILS, "%s", "Changed hydraulic fluid");
+
+    snprintf(machineName[1], MAX_NAME, "%s", "Metal Lathe");
+    snprintf(machineID[1], MAX_ID, "%s", "2");
+    snprintf(maintenanceDate[1], MAX_DATE, "%s", "2025-07-15");
+    snprintf(maintenanceDetails[1], MAX_DETAILS, "%s", "Replaced belts");
+    record_count = 2;
+
+    const char *input = "Lathe\n";
+    int saved_stdin = -1;
+    FILE *stdin_temp = NULL;
+    int stdin_status = redirect_stdin_from_string(input, &saved_stdin, &stdin_temp);
+    ASSERT_TRUE(suite, "search stdin redirect", stdin_status == 0,
+                "redirect status %d", stdin_status);
+
+    int saved_stdout = -1;
+    FILE *stdout_temp = NULL;
+    int stdout_status = redirect_stdout_to_temp(&saved_stdout, &stdout_temp);
+    ASSERT_TRUE(suite, "search stdout redirect", stdout_status == 0,
+                "redirect status %d", stdout_status);
+
+    if (stdin_status == 0)
+    {
+        search_records();
+    }
+
+    if (stdout_status == 0)
+    {
+        char output[1024];
+        int read_status = read_captured_stdout(stdout_temp, output, sizeof(output));
+        ASSERT_TRUE(suite, "search capture readable", read_status == 0,
+                    "read status %d", read_status);
+        if (read_status == 0)
+        {
+            ASSERT_TRUE(suite, "search lists lathe", strstr(output, "Metal Lathe") != NULL,
+                        "output: %s", output);
+        }
+    }
+
+    restore_stdout(saved_stdout, stdout_temp);
+    restore_stdin(saved_stdin, stdin_temp);
+
+    reset_storage();
+}
+
+static void test_update_record_applies_changes(void)
+{
+    const char *suite = "Main Actions";
+    reset_storage();
+    exit_requested = 0;
+    interrupt_requested = 0;
+
+    snprintf(machineName[0], MAX_NAME, "%s", "Metal Lathe");
+    snprintf(machineID[0], MAX_ID, "%s", "1");
+    snprintf(maintenanceDate[0], MAX_DATE, "%s", "2025-07-15");
+    snprintf(maintenanceDetails[0], MAX_DETAILS, "%s", "Replaced belts");
+    record_count = 1;
+
+    const char *input = "1\nNew Lathe\n2025-11-01\nUpdated details\nY\n";
+    int saved_stdin = -1;
+    FILE *stdin_temp = NULL;
+    int stdin_status = redirect_stdin_from_string(input, &saved_stdin, &stdin_temp);
+    ASSERT_TRUE(suite, "update stdin redirect", stdin_status == 0,
+                "redirect status %d", stdin_status);
+
+    int saved_stdout = -1;
+    FILE *stdout_temp = NULL;
+    int stdout_status = redirect_stdout_to_temp(&saved_stdout, &stdout_temp);
+    ASSERT_TRUE(suite, "update stdout redirect", stdout_status == 0,
+                "redirect status %d", stdout_status);
+
+    if (stdin_status == 0)
+    {
+        update_record();
+    }
+
+    restore_stdout(saved_stdout, stdout_temp);
+    restore_stdin(saved_stdin, stdin_temp);
+
+    ASSERT_EQ_INT(suite, "record count after update", 1, record_count);
+    ASSERT_STREQ(suite, "updated name", "New Lathe", machineName[0]);
+    ASSERT_STREQ(suite, "updated date", "2025-11-01", maintenanceDate[0]);
+    ASSERT_STREQ(suite, "updated details", "Updated details", maintenanceDetails[0]);
+
+    reset_storage();
+}
+
+static void test_delete_record_removes_entry(void)
+{
+    const char *suite = "Main Actions";
+    reset_storage();
+    exit_requested = 0;
+    interrupt_requested = 0;
+
+    snprintf(machineName[0], MAX_NAME, "%s", "Metal Lathe");
+    snprintf(machineID[0], MAX_ID, "%s", "1");
+    snprintf(maintenanceDate[0], MAX_DATE, "%s", "2025-07-15");
+    snprintf(maintenanceDetails[0], MAX_DETAILS, "%s", "Replaced belts");
+    record_count = 1;
+
+    const char *input = "1\nY\n";
+    int saved_stdin = -1;
+    FILE *stdin_temp = NULL;
+    int stdin_status = redirect_stdin_from_string(input, &saved_stdin, &stdin_temp);
+    ASSERT_TRUE(suite, "delete stdin redirect", stdin_status == 0,
+                "redirect status %d", stdin_status);
+
+    int saved_stdout = -1;
+    FILE *stdout_temp = NULL;
+    int stdout_status = redirect_stdout_to_temp(&saved_stdout, &stdout_temp);
+    ASSERT_TRUE(suite, "delete stdout redirect", stdout_status == 0,
+                "redirect status %d", stdout_status);
+
+    if (stdin_status == 0)
+    {
+        delete_record();
+    }
+
+    restore_stdout(saved_stdout, stdout_temp);
+    restore_stdin(saved_stdin, stdin_temp);
+
+    ASSERT_EQ_INT(suite, "record count after delete", 0, record_count);
+
+    reset_storage();
+}
+
 static int run_internal_unit_tests(void)
 {
     unit_result_count = 0;
@@ -1978,6 +2279,11 @@ static int run_internal_unit_tests(void)
     test_ensure_csv_exists_blank();
     test_save_and_load_round_trip();
     test_storage_capacity_guard();
+    test_display_records_outputs_content();
+    test_add_record_interactive_success();
+    test_search_records_finds_matches();
+    test_update_record_applies_changes();
+    test_delete_record_removes_entry();
 
     print_unit_results_table();
 
