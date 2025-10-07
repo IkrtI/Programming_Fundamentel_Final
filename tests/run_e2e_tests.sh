@@ -9,4 +9,4 @@ gcc -std=c11 -O2 -Wall -Wextra -DENABLE_INTERNAL_TESTS -I"$ROOT_DIR" \
     -o "$E2E_BIN" "$ROOT_DIR/main.c"
 
 cd "$ROOT_DIR"
-"$E2E_BIN" --run-e2e-tests
+"$E2E_BIN" --run-e2e-tests 2>&1

@@ -11,6 +11,6 @@ gcc -std=c11 -O2 -Wall -Wextra -DENABLE_INTERNAL_TESTS -I"%ROOT_DIR%" ^
     -o "%E2E_BIN%" "%ROOT_DIR%\main.c"
 
 pushd "%ROOT_DIR%" >nul
-"%E2E_BIN%" --run-e2e-tests
+"%E2E_BIN%" --run-e2e-tests 2>&1
 popd >nul
 endlocal
