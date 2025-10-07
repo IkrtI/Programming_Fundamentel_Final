@@ -78,38 +78,43 @@ jobs:
         shell: msys2 {0}
         run: gcc -std=c11 -Wall -Wextra -O2 -o maint.exe main.c
 
-      # - name: Run unit and end-to-end tests
-      #   if: runner.os != 'Windows'
-      #   run: |
-      #     set -o pipefail
-      #     LOG_FILE="test-results-${{ matrix.artifact_name }}.txt"
-      #     : > "$LOG_FILE"
-      #     gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_validation tests/test_validation.c main.c
-      #     ./tests/test_validation | tee -a "$LOG_FILE"
-      #     gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_end_to_end tests/test_end_to_end.c main.c
-      #     ./tests/test_end_to_end | tee -a "$LOG_FILE"
-      #     echo "UNIT_TEST_LOG=$LOG_FILE" >> "$GITHUB_ENV"
+      - name: Run unit tests
+        if: runner.os != 'Windows'
+        run: |
+          set -o pipefail
+          mkdir -p test-results
+          ./tests/run_unit_tests.sh | tee test-results/unit-tests-${{ matrix.artifact_name }}.txt
 
-      # - name: Run unit and end-to-end tests (Windows)
-      #   if: runner.os == 'Windows'
-      #   shell: msys2 {0}
-      #   run: |
-      #     set -o pipefail
-      #     LOG_FILE="test-results-${{ matrix.artifact_name }}.txt"
-      #     : > "$LOG_FILE"
-      #     gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_validation.exe tests/test_validation.c main.c
-      #     ./tests/test_validation.exe | tee -a "$LOG_FILE"
-      #     gcc -std=c11 -Wall -Wextra -O2 -DUNIT_TEST -I. -o tests/test_end_to_end.exe tests/test_end_to_end.c main.c
-      #     ./tests/test_end_to_end.exe | tee -a "$LOG_FILE"
-      #     GITHUB_ENV_POSIX="$(cygpath "$GITHUB_ENV")"
-      #     echo "UNIT_TEST_LOG=$LOG_FILE" >> "$GITHUB_ENV_POSIX"
+      - name: Run unit tests (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          set -o pipefail
+          mkdir -p test-results
+          ./tests/run_unit_tests.sh | tee test-results/unit-tests-${{ matrix.artifact_name }}.txt
 
-      # - name: Upload unit test results
-      #   if: env.UNIT_TEST_LOG != ''
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: ${{ matrix.artifact_name }}-unit-tests
-      #     path: ${{ env.UNIT_TEST_LOG }}
+      - name: Run end-to-end tests
+        if: runner.os != 'Windows'
+        run: |
+          set -o pipefail
+          mkdir -p test-results
+          ./tests/run_e2e_tests.sh | tee test-results/e2e-tests-${{ matrix.artifact_name }}.txt
+
+      - name: Run end-to-end tests (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          set -o pipefail
+          mkdir -p test-results
+          ./tests/run_e2e_tests.sh | tee test-results/e2e-tests-${{ matrix.artifact_name }}.txt
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-tests
+          path: test-results/*.txt
+          if-no-files-found: warn
 
       - name: Package artifact
         if: runner.os != 'Windows'
