@@ -9,12 +9,13 @@ if "%CC%"=="" (
 if "%CFLAGS%"=="" (
     set "CFLAGS=-std=c11 -Wall -Wextra -O2"
 )
+set "EXTRA_DEFINES=-DENABLE_INTERNAL_TESTS"
 
 set "OUTPUT=%SCRIPT_DIR%\maint.exe"
 set "SRC=%SCRIPT_DIR%\main.c"
 set "INCLUDE=-I%SCRIPT_DIR%"
 
-echo Building maint with %CC% %CFLAGS%
-"%CC%" %CFLAGS% %INCLUDE% -o "%OUTPUT%" "%SRC%"
+echo Building maint with %CC% %CFLAGS% %EXTRA_DEFINES%
+"%CC%" %CFLAGS% %EXTRA_DEFINES% %INCLUDE% -o "%OUTPUT%" "%SRC%"
 if errorlevel 1 exit /b 1
 echo Output: %OUTPUT%

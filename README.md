@@ -30,27 +30,27 @@ Machine Maintenance Manager
 
 ### Build
 
-สำหรับ Linux / macOS ให้ใช้สคริปต์ `build.sh` ที่เตรียมไว้:
+สำหรับ Linux / macOS ให้ใช้สคริปต์ `build.sh` ที่เตรียมไว้ (สคริปต์จะคอมไพล์พร้อมแฟล็ก `-DENABLE_INTERNAL_TESTS` เพื่อเปิดเมนู **Test program** และใช้งานไบนารี `maint_tests` ได้ทันที):
 
 ```bash
 ./build.sh
 ```
 
-บน Windows ใช้ `build.bat` ซึ่งตั้งค่าพารามิเตอร์มาตรฐานให้แล้ว:
+บน Windows ใช้ `build.bat` ซึ่งตั้งค่าพารามิเตอร์มาตรฐาน (รวมแฟล็ก `-DENABLE_INTERNAL_TESTS`) ให้แล้ว:
 
 ```bat
 build.bat
 ```
 
-หากต้องการคอมไพล์เองด้วยคำสั่งเดิมก็ยังใช้ได้:
+หากต้องการคอมไพล์เองด้วยคำสั่งเดิมก็ยังใช้ได้ (อย่าลืมใส่ `-DENABLE_INTERNAL_TESTS` เพื่อให้เมนูทดสอบพร้อมใช้งาน):
 
 ```bash
-gcc -std=c11 -Wall -Wextra -O2 -o maint main.c
+gcc -std=c11 -Wall -Wextra -O2 -DENABLE_INTERNAL_TESTS -I. -o maint main.c
 ```
 
 ค่าเริ่มต้นจะสร้างไฟล์ปฏิบัติการหลัก `maint` (หรือ `maint.exe`)
 
-> ✅ ต้องการให้เมนู **Test program** พร้อมทั้งไฟล์ `maint_tests`? คอมไพล์ด้วยแฟล็ก `-DENABLE_INTERNAL_TESTS` ดังตัวอย่างในหัวข้อ [Run automated tests](#run-automated-tests)
+> ✅ เมนู **Test program** และไบนารี `maint_tests` จะพร้อมใช้งานโดยอัตโนมัติ เพราะคำสั่งคอมไพล์ทั้งหมดในโปรเจกต์เปิดแฟล็ก `-DENABLE_INTERNAL_TESTS` ให้อยู่แล้ว (ดูตัวอย่างเพิ่มเติมในหัวข้อ [Run automated tests](#run-automated-tests))
 
 ### Run
 

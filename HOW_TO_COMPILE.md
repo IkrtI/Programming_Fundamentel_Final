@@ -24,23 +24,23 @@ project/
 
 ## 3. คำสั่งคอมไพล์มาตรฐาน
 
-รันคำสั่งต่อไปนี้จากรูทโปรเจกต์ (โฟลเดอร์เดียวกับ `main.c`):
+รันคำสั่งต่อไปนี้จากรูทโปรเจกต์ (โฟลเดอร์เดียวกับ `main.c`) โดยเปิดแฟล็ก `-DENABLE_INTERNAL_TESTS` เพื่อให้เมนู **Test program** พร้อมใช้งาน และสามารถสร้างไบนารีทดสอบได้ทันที:
 
 ```bash
-gcc -std=c11 -Wall -Wextra -O2 -o maint main.c
+gcc -std=c11 -Wall -Wextra -O2 -DENABLE_INTERNAL_TESTS -I. -o maint main.c
 ```
 
-หรือใช้สคริปต์ที่เตรียมไว้ให้ช่วยตั้งค่ามาตรฐาน:
+หรือใช้สคริปต์ที่เตรียมไว้ให้ช่วยตั้งค่ามาตรฐาน (ทั้ง `build.sh` และ `build.bat` จะเติม `-DENABLE_INTERNAL_TESTS` ให้อัตโนมัติ):
 
 ```bash
 ./build.sh          # Linux / macOS
 build.bat           # Windows
 ```
 
-หากใช้ Clang แทน GCC สามารถสลับชื่อคอมไพเลอร์:
+หากใช้ Clang แทน GCC สามารถสลับชื่อคอมไพเลอร์ โดยยังคงต้องระบุแฟล็ก `-DENABLE_INTERNAL_TESTS`:
 
 ```bash
-clang -std=c11 -Wall -Wextra -O2 -o maint main.c
+clang -std=c11 -Wall -Wextra -O2 -DENABLE_INTERNAL_TESTS -I. -o maint main.c
 ```
 
 ### ตัวเลือกเพิ่มเติม (ไม่บังคับ)
@@ -49,10 +49,10 @@ clang -std=c11 -Wall -Wextra -O2 -o maint main.c
 
 ## 4. การคอมไพล์บน Windows (MinGW-w64)
 
-เปิด *MSYS2 MinGW 64-bit* shell แล้วรัน:
+เปิด *MSYS2 MinGW 64-bit* shell แล้วรัน (พร้อมแฟล็ก `-DENABLE_INTERNAL_TESTS`):
 
 ```bash
-x86_64-w64-mingw32-gcc -std=c11 -Wall -Wextra -O2 -o maint.exe main.c
+x86_64-w64-mingw32-gcc -std=c11 -Wall -Wextra -O2 -DENABLE_INTERNAL_TESTS -I. -o maint.exe main.c
 ```
 
 ไฟล์ปฏิบัติการที่ได้คือ `maint.exe`
@@ -89,7 +89,7 @@ maint.exe        # บน Windows
 
 ### การรันทดสอบภายใน
 
-ถ้าต้องการให้เมนู **Test program** พร้อมใช้งานในไบนารีหลัก หรืออยากสร้างไฟล์ `maint_tests` สำหรับรันทดสอบในโปรเซสเดียวกัน ให้คอมไพล์ด้วยแฟล็ก `-DENABLE_INTERNAL_TESTS`:
+เมนู **Test program** จะเปิดใช้งานโดยอัตโนมัติ เพราะคำสั่งคอมไพล์ของโปรเจกต์ทั้งหมดระบุแฟล็ก `-DENABLE_INTERNAL_TESTS` อยู่แล้ว หากต้องการสร้างไฟล์ `maint_tests` แยกต่างหากสามารถใช้คำสั่งต่อไปนี้:
 
 ```bash
 gcc -std=c11 -Wall -Wextra -O2 -DENABLE_INTERNAL_TESTS -I. -o maint main.c      # เปิดเมนู Test program ในไบนารีหลัก
