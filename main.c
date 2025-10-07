@@ -2810,6 +2810,245 @@ void delete_record(void)
     printf("Unable to delete record.\n");
 }
 
+#if defined(UNIT_TEST)
+
+typedef struct test_stats
+{
+    int total;
+    int failed;
+} test_stats_t;
+
+static void test_assert(test_stats_t *stats, int condition, const char *message)
+{
+    if (!stats || !message)
+    {
+        return;
+    }
+
+    stats->total++;
+    if (condition)
+    {
+        printf("   [PASS] %s\n", message);
+    }
+    else
+    {
+        stats->failed++;
+        printf("   [FAIL] %s\n", message);
+    }
+}
+
+static void print_test_section_header(const char *title)
+{
+    if (!title)
+    {
+        title = "";
+    }
+
+    printf("\n=== %s ===\n", title);
+}
+
+static int derive_scratch_csv_path(char *buffer, size_t size)
+{
+    if (!buffer || size == 0)
+    {
+        return -1;
+    }
+
+#if defined(_WIN32)
+    const char *tmpdir = getenv("TMPDIR");
+    if (!tmpdir || tmpdir[0] == '\0')
+    {
+        tmpdir = getenv("TEMP");
+    }
+    if (!tmpdir || tmpdir[0] == '\0')
+    {
+        tmpdir = getenv("TMP");
+    }
+    if (!tmpdir || tmpdir[0] == '\0')
+    {
+        tmpdir = ".";
+    }
+
+    size_t dir_len = strlen(tmpdir);
+    int needs_sep = 1;
+    if (dir_len > 0)
+    {
+        char last = tmpdir[dir_len - 1];
+        if (last == '/' || last == '\\')
+        {
+            needs_sep = 0;
+        }
+    }
+
+    char template_buffer[CSV_PATH_MAX];
+    int written = 0;
+    if (needs_sep)
+    {
+        written = snprintf(template_buffer, sizeof(template_buffer), "%s%cmaintenance_e2e_XXXXXX.csv", tmpdir, '\\');
+    }
+    else
+    {
+        written = snprintf(template_buffer, sizeof(template_buffer), "%smaintenance_e2e_XXXXXX.csv", tmpdir);
+    }
+
+    if (written < 0 || (size_t)written >= sizeof(template_buffer))
+    {
+        return -1;
+    }
+
+    if (_mktemp_s(template_buffer, strlen(template_buffer) + 1) != 0)
+    {
+        return -1;
+    }
+
+    int final_written = snprintf(buffer, size, "%s", template_buffer);
+    if (final_written < 0 || (size_t)final_written >= size)
+    {
+        return -1;
+    }
+    return 0;
+#else
+    const char *tmpdir = getenv("TMPDIR");
+    if (!tmpdir || tmpdir[0] == '\0')
+    {
+        tmpdir = "/tmp";
+    }
+
+    size_t dir_len = strlen(tmpdir);
+    int needs_sep = 1;
+    if (dir_len > 0 && (tmpdir[dir_len - 1] == '/' || tmpdir[dir_len - 1] == '\\'))
+    {
+        needs_sep = 0;
+    }
+
+    char template_buffer[CSV_PATH_MAX];
+    int written = 0;
+    if (needs_sep)
+    {
+        written = snprintf(template_buffer, sizeof(template_buffer), "%s/maintenance_e2e_XXXXXX", tmpdir);
+    }
+    else
+    {
+        written = snprintf(template_buffer, sizeof(template_buffer), "%smaintenance_e2e_XXXXXX", tmpdir);
+    }
+
+    if (written < 0 || (size_t)written >= sizeof(template_buffer))
+    {
+        return -1;
+    }
+
+    int fd = mkstemp(template_buffer);
+    if (fd < 0)
+    {
+        return -1;
+    }
+    close(fd);
+
+    int final_written = snprintf(buffer, size, "%s.csv", template_buffer);
+    if (final_written < 0 || (size_t)final_written >= size)
+    {
+        remove(template_buffer);
+        return -1;
+    }
+
+    if (rename(template_buffer, buffer) != 0)
+    {
+        remove(template_buffer);
+        return -1;
+    }
+    return 0;
+#endif
+}
+
+void run_end_to_end_test(test_stats_t *stats)
+{
+    print_test_section_header("End-to-End Test: workflow");
+
+    char original_path[CSV_PATH_MAX];
+    snprintf(original_path, sizeof(original_path), "%s", maintenance_get_csv_path());
+
+    char scratch_path[CSV_PATH_MAX] = {0};
+    if (derive_scratch_csv_path(scratch_path, sizeof(scratch_path)) != 0)
+    {
+        test_assert(stats, 0, "Generate scratch CSV path");
+        return;
+    }
+
+    FILE *scratch = fopen(scratch_path, "w+");
+    test_assert(stats, scratch != NULL, "Open scratch CSV path");
+    if (!scratch)
+    {
+        remove(scratch_path);
+        maintenance_set_csv_path(original_path);
+        return;
+    }
+    fclose(scratch);
+
+    int path_switched = 0;
+    if (maintenance_set_csv_path(scratch_path) != 0)
+    {
+        test_assert(stats, 0, "Switch to test CSV path");
+        goto cleanup;
+    }
+    path_switched = 1;
+
+    clear_record_storage();
+
+    test_assert(stats, add_record_direct("Hydraulic Press", "101", "2025-08-01",
+                                         "Changed hydraulic fluid") == RECORD_SUCCESS,
+                "Add first record");
+    test_assert(stats, add_record_direct("Laser Cutter", "202", "2025-08-05",
+                                         "Replaced air filter") == RECORD_SUCCESS,
+                "Add second record");
+
+    test_assert(stats, save_all_records() == 0, "Persist records to CSV");
+
+    clear_record_storage();
+    test_assert(stats, load_records() == 0, "Reload records from CSV");
+    test_assert(stats, record_count == 2, "Record count after reload is 2");
+    test_assert(stats, strcmp(machineName[0], "Hydraulic Press") == 0, "First record name matches");
+    test_assert(stats, strcmp(machineID[1], "202") == 0, "Second record ID matches");
+
+    test_assert(stats, delete_record_direct("101") == RECORD_SUCCESS, "Delete first record");
+    test_assert(stats, record_count == 1, "Record count after delete is 1");
+    test_assert(stats, strcmp(machineID[0], "202") == 0, "Remaining record has expected ID");
+
+    test_assert(stats, save_all_records() == 0, "Persist updated records");
+
+    clear_record_storage();
+    test_assert(stats, load_records() == 0, "Reload updated records");
+    test_assert(stats, record_count == 1, "Final record count is 1");
+    test_assert(stats, strcmp(machineName[0], "Laser Cutter") == 0, "Final record still correct");
+
+cleanup:
+    if (path_switched)
+    {
+        clear_record_storage();
+        int restore_status = maintenance_set_csv_path(original_path);
+        test_assert(stats, restore_status == 0, "Restore original CSV path");
+        if (restore_status == 0)
+        {
+            test_assert(stats, load_records() == 0, "Reload original data");
+        }
+        else
+        {
+            test_assert(stats, 0, "Reload original data");
+        }
+    }
+    else
+    {
+        maintenance_set_csv_path(original_path);
+    }
+
+    if (scratch_path[0] != '\0')
+    {
+        remove(scratch_path);
+    }
+    clear_record_storage();
+}
+
+#endif /* UNIT_TEST */
+
 
 int safe_input(char *buffer, int size, const char *prompt)
 {
