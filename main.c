@@ -33,25 +33,28 @@ static char csv_file_path[CSV_PATH_MAX] = CSV_FILE_DEFAULT;
 static const char *SAMPLE_CSV_FILE = "maintenance-example.csv";
 static const char CSV_HEADER[] = "MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n";
 
+/* Portable UNUSED function attribute to silence unused warnings on some builds */
+#if !defined(UNUSED_FN)
+# if defined(__GNUC__) || defined(__clang__)
+#  define UNUSED_FN __attribute__((unused))
+# else
+#  define UNUSED_FN
+# endif
+#endif
+
 char machineName[MAX_RECORDS][MAX_NAME];
 char machineID[MAX_RECORDS][MAX_ID];
 char maintenanceDate[MAX_RECORDS][MAX_DATE];
 char maintenanceDetails[MAX_RECORDS][MAX_DETAILS];
 int record_count = 0;
 
-typedef enum record_result
-{
-    RECORD_SUCCESS = 0,
-    RECORD_ERROR_STORAGE_FULL = -1,
-    RECORD_ERROR_INVALID_DATA = -2,
-    RECORD_ERROR_DUPLICATE_ID = -3,
-    RECORD_ERROR_NOT_FOUND = -4
-} record_result_t;
-
 static record_result_t add_record_direct(const char *name, const char *id,
                                          const char *date, const char *details);
 static record_result_t delete_record_direct(const char *id);
-static void run_test_program(void);
+#ifndef UNIT_TEST
+static void run_unit_test_suite(void);
+static void run_end_to_end_suite(void);
+#endif
 
 static volatile sig_atomic_t interrupt_requested = 0;
 static volatile sig_atomic_t exit_requested = 0;
@@ -60,28 +63,22 @@ static void print_cancel_message(void)
 {
     printf("\nOperation cancelled. Returning to Machine Maintenance Manager.\n");
 }
-
-static void clear_record_storage(void);
-static void handle_sigint(int signal);
-static void flush_line(void);
-static void request_exit(void);
-static int exit_program(int status);
-static int prompt_copy_from_sample(void);
-static int write_blank_csv(const char *path);
-static int copy_example_csv(const char *path);
-static int copy_csv_file(const char *source, const char *destination);
-static int show_csv_control_menu(void);
+static void UNUSED_FN clear_record_storage(void);
+static void UNUSED_FN handle_sigint(int signal);
+static int UNUSED_FN exit_program(int status);
+static int UNUSED_FN show_csv_control_menu(void);
 static int read_csv_menu_choice(size_t csv_count, int *selected_index, char *command);
 static int prompt_csv_index_selection(size_t csv_count, const char *prompt, int *out_index);
 static int has_csv_extension(const char *name);
 static int is_regular_file(const char *path, const struct dirent *entry);
 static int compare_csv_names(const void *lhs, const void *rhs);
-static void render_csv_menu(char *const *csv_files, size_t csv_count);
 static int compare_records_by_schedule(const void *lhs, const void *rhs);
-static void handle_addon_menu(void);
+static void render_csv_menu(char *const *csv_files, size_t csv_count);
+static void UNUSED_FN handle_addon_menu(void);
 static void display_addon_menu(void);
 static int read_addon_choice(void);
 static void resequence_machine_ids(void);
+static void normalize_imported_details(char *details);
 static void print_record_table_header(void);
 static void print_record_table_footer(void);
 static void print_record_table_row(int index);
@@ -90,7 +87,13 @@ static void print_record_preview_from_values(const char *name, const char *id,
 static int get_terminal_height(void);
 static int calculate_records_per_page(void);
 static void clear_console_output(void);
-static void clear_function_log(void);
+static void UNUSED_FN clear_function_log(void);
+static void flush_line(void);
+static void request_exit(void);
+static int prompt_copy_from_sample(void);
+static int write_blank_csv(const char *path);
+static int copy_example_csv(const char *path);
+static int copy_csv_file(const char *source, const char *destination);
 static int interpret_paging_arrow(const char *input);
 static int read_paging_command(char *buffer, size_t size);
 static int contains_back_signal(const char *str);
@@ -101,12 +104,41 @@ static int find_smallest_available_machine_id(void);
 static int prompt_machine_id(char *buffer, size_t size);
 static int string_contains_case_insensitive(const char *haystack, const char *needle);
 static int prompt_confirmation(const char *prompt, int *out_confirmed);
+
 #if !defined(_WIN32) && !defined(UNIT_TEST)
 static void restore_terminal_settings(void);
 static int configure_terminal_shortcuts(void);
 static struct termios original_termios;
 static int terminal_configured = 0;
 #endif
+
+/* Forward declarations for public functions implemented in this file */
+int safe_input(char *buffer, int size, const char *prompt);
+int prompt_with_validation(char *buffer, int size, const char *prompt,
+                           int (*validator)(const char *), const char *error_message);
+void trim_whitespace(char *str);
+void sanitize_input(char *buffer);
+int is_non_empty(const char *str);
+int contains_disallowed_csv_chars(const char *str);
+int contains_cancel_signal(const char *str);
+int is_valid_machine_name(const char *str);
+int is_valid_machine_id(const char *str);
+int is_valid_date(const char *str);
+int is_valid_details(const char *str);
+int prompt_optional_update(const char *prompt, char *dest, int dest_size,
+                           int (*validator)(const char *), const char *error_message);
+int maintenance_set_csv_path(const char *path);
+const char *maintenance_get_csv_path(void);
+int ensure_csv_exists(void);
+int load_records(void);
+int save_all_records(void);
+int reload_records_with_warning(void);
+int is_record_storage_full(void);
+void display_records(void);
+void add_record(void);
+void search_records(void);
+void update_record(void);
+void delete_record(void);
 
 static int handle_prompt_result(int status, const char *error_message)
 {
@@ -146,14 +178,16 @@ static void request_exit(void)
     interrupt_requested = 1;
 }
 
-static int exit_program(int status)
+#ifndef UNIT_TEST
+static int UNUSED_FN exit_program(int status)
 {
-#if !defined(_WIN32) && !defined(UNIT_TEST)
+#if !defined(_WIN32)
     restore_terminal_settings();
 #endif
     clear_record_storage();
     return status;
 }
+#endif
 
 #if !defined(_WIN32) && !defined(UNIT_TEST)
 static void restore_terminal_settings(void)
@@ -300,7 +334,6 @@ static int compare_records_by_schedule(const void *lhs, const void *rhs)
 
     if (left_empty && right_empty)
     {
-        /* Fallback to name for consistent ordering */
         int name_cmp = strcmp(machineName[left_index], machineName[right_index]);
         if (name_cmp != 0)
         {
@@ -311,7 +344,7 @@ static int compare_records_by_schedule(const void *lhs, const void *rhs)
 
     if (left_empty)
     {
-        return 1; /* empty dates go last */
+        return 1;
     }
 
     if (right_empty)
@@ -325,7 +358,6 @@ static int compare_records_by_schedule(const void *lhs, const void *rhs)
         return cmp;
     }
 
-    /* Same date: order by machine name, then by ID */
     cmp = strcmp(machineName[left_index], machineName[right_index]);
     if (cmp != 0)
     {
@@ -826,7 +858,7 @@ static void render_csv_menu(char *const *csv_files, size_t csv_count)
     printf("Q. Exit\n");
 }
 
-static int show_csv_control_menu(void)
+static int UNUSED_FN show_csv_control_menu(void)
 {
     DIR *dir = opendir(".");
     char **csv_files = NULL;
@@ -1124,18 +1156,13 @@ static int show_csv_control_menu(void)
     return result;
 }
 
-static void handle_addon_menu(void)
+static void UNUSED_FN handle_addon_menu(void)
 {
     while (!exit_requested && !interrupt_requested)
     {
         display_addon_menu();
         int choice = read_addon_choice();
-        if (choice < 0)
-        {
-            return;
-        }
-
-        if (choice == 0 || choice == 2)
+        if (choice <= 0)
         {
             return;
         }
@@ -1144,6 +1171,10 @@ static void handle_addon_menu(void)
         {
             resequence_machine_ids();
         }
+        else if (choice == 2)
+        {
+            return;
+        }
     }
 }
 
@@ -1151,7 +1182,7 @@ static void display_addon_menu(void)
 {
     printf("\nAdd-on Tools\n");
     printf("1. Resequence machine IDs by maintenance date\n");
-    printf("2. Return to Machine Maintenance Manager\n");
+    printf("2. Return to main menu\n");
 }
 
 static int read_addon_choice(void)
@@ -1256,8 +1287,11 @@ static void resequence_machine_ids(void)
 
 static void print_record_table_header(void)
 {
+    /* Top border */
     printf("+----------------------+--------------+--------------+--------------------------------+\n");
+    /* Header titles */
     printf("| Machine Name         | Machine ID   | Date         | Details                        |\n");
+    /* Header separator */
     printf("+----------------------+--------------+--------------+--------------------------------+\n");
 }
 
@@ -1387,11 +1421,9 @@ static void clear_console_output(void)
 #endif
 }
 
-static void clear_function_log(void)
+#ifndef UNIT_TEST
+static void UNUSED_FN clear_function_log(void)
 {
-#if defined(UNIT_TEST)
-    (void)0;
-#else
     if (exit_requested || interrupt_requested)
     {
         return;
@@ -1429,8 +1461,8 @@ static void clear_function_log(void)
     }
 
     clear_console_output();
-#endif
 }
+#endif
 
 static int interpret_paging_arrow(const char *input)
 {
@@ -1747,13 +1779,10 @@ int main(void)
             break;
         }
 
-        int should_clear_log = 0;
-
         switch (choice)
         {
         case 1:
             display_records();
-            should_clear_log = 1;
             break;
         case 2:
             add_record();
@@ -1761,11 +1790,9 @@ int main(void)
             {
                 reload_records_with_warning();
             }
-            should_clear_log = 1;
             break;
         case 3:
             search_records();
-            should_clear_log = 1;
             break;
         case 4:
             update_record();
@@ -1773,7 +1800,6 @@ int main(void)
             {
                 reload_records_with_warning();
             }
-            should_clear_log = 1;
             break;
         case 5:
             delete_record();
@@ -1781,17 +1807,17 @@ int main(void)
             {
                 reload_records_with_warning();
             }
-            should_clear_log = 1;
             break;
         case 6:
             handle_addon_menu();
-            should_clear_log = 1;
             break;
         case 7:
-            run_test_program();
-            should_clear_log = 1;
+            run_unit_test_suite();
             break;
         case 8:
+            run_end_to_end_suite();
+            break;
+        case 9:
             printf("Exiting...\n");
             exit_requested = 1;
             break;
@@ -1799,11 +1825,11 @@ int main(void)
             printf("Invalid choice. Please try again.\n");
         }
 
-        if (should_clear_log && !exit_requested && !interrupt_requested)
+        if (choice >= 1 && choice <= 5 && !exit_requested && !interrupt_requested)
         {
             clear_function_log();
         }
-    } while (!exit_requested && choice != 8);
+    } while (!exit_requested && choice != 9);
 
     if (exit_requested && interrupt_requested)
     {
@@ -1824,8 +1850,54 @@ void display_menu(void)
     printf("4. Update record\n");
     printf("5. Delete record\n");
     printf("6. Add-on tools\n");
-    printf("7. Test program\n");
-    printf("8. Exit\n");
+    printf("---------\n");
+    printf("7. Run unit tests\n");
+    printf("8. Run end-to-end tests\n");
+    printf("9. Exit\n");
+}
+
+static void run_unit_test_suite(void)
+{
+#ifdef _WIN32
+    const char *command = "cmd /c tests\\run_unit_tests.bat";
+#else
+    const char *command = "sh ./tests/run_unit_tests.sh";
+#endif
+
+    printf("\nRunning unit test suite...\n");
+    int status = system(command);
+    if (status == -1)
+    {
+        printf("Unable to launch unit tests. Ensure the test runner exists at './tests/run_unit_tests.sh'.\n");
+        return;
+    }
+
+    if (status != 0)
+    {
+        printf("Unit test suite completed with exit code %d.\n", status);
+    }
+}
+
+static void run_end_to_end_suite(void)
+{
+#ifdef _WIN32
+    const char *command = "cmd /c tests\\run_e2e_tests.bat";
+#else
+    const char *command = "sh ./tests/run_e2e_tests.sh";
+#endif
+
+    printf("\nRunning end-to-end tests...\n");
+    int status = system(command);
+    if (status == -1)
+    {
+        printf("Unable to launch end-to-end tests. Ensure the test runner exists at './tests/run_e2e_tests.sh'.\n");
+        return;
+    }
+
+    if (status != 0)
+    {
+        printf("End-to-end test suite completed with exit code %d.\n", status);
+    }
 }
 #endif
 
@@ -2055,6 +2127,7 @@ int load_records(void)
         snprintf(machineName[record_count], MAX_NAME, "%s", n);
         snprintf(machineID[record_count], MAX_ID, "%s", id);
         snprintf(maintenanceDate[record_count], MAX_DATE, "%s", d);
+        normalize_imported_details(det);
         snprintf(maintenanceDetails[record_count], MAX_DETAILS, "%s", det);
 
         record_count++;
@@ -2072,6 +2145,45 @@ int load_records(void)
         return -1;
     }
     return 0;
+}
+
+/* Some CSVs may include an extra trailing numeric column (e.g., ",1").
+   Since our schema does not allow commas in details, strip a final ",<digits>". */
+static void normalize_imported_details(char *details)
+{
+    if (!details)
+    {
+        return;
+    }
+
+    size_t len = strlen(details);
+    if (len == 0)
+    {
+        return;
+    }
+
+    char *last_comma = strrchr(details, ',');
+    if (!last_comma)
+    {
+        return;
+    }
+
+    const char *p = last_comma + 1;
+    if (*p == '\0')
+    {
+        return;
+    }
+
+    while (*p && isdigit((unsigned char)*p))
+    {
+        ++p;
+    }
+
+    if (*p == '\0' && last_comma > details)
+    {
+        *last_comma = '\0';
+        trim_whitespace(details);
+    }
 }
 
 int save_all_records(void)
@@ -2698,6 +2810,8 @@ void delete_record(void)
     printf("Unable to delete record.\n");
 }
 
+#if defined(UNIT_TEST)
+
 typedef struct test_stats
 {
     int total;
@@ -2725,75 +2839,158 @@ static void test_assert(test_stats_t *stats, int condition, const char *message)
 
 static void print_test_section_header(const char *title)
 {
+    if (!title)
+    {
+        title = "";
+    }
+
     printf("\n=== %s ===\n", title);
 }
 
-static void run_unit_test_add_machine(test_stats_t *stats)
+static int derive_scratch_csv_path(char *buffer, size_t size)
 {
-    print_test_section_header("Unit Test: add_machine");
+    if (!buffer || size == 0)
+    {
+        return -1;
+    }
 
-    clear_record_storage();
+#if defined(_WIN32)
+    const char *tmpdir = getenv("TMPDIR");
+    if (!tmpdir || tmpdir[0] == '\0')
+    {
+        tmpdir = getenv("TEMP");
+    }
+    if (!tmpdir || tmpdir[0] == '\0')
+    {
+        tmpdir = getenv("TMP");
+    }
+    if (!tmpdir || tmpdir[0] == '\0')
+    {
+        tmpdir = ".";
+    }
 
-    record_result_t status = add_record_direct("Unit Test Rig", "1", "2025-01-15", "Initial calibration");
-    test_assert(stats, status == RECORD_SUCCESS, "add_record_direct returns success");
-    test_assert(stats, record_count == 1, "Record count increments to 1");
-    test_assert(stats, strcmp(machineName[0], "Unit Test Rig") == 0, "Machine name stored correctly");
-    test_assert(stats, strcmp(machineID[0], "1") == 0, "Machine ID stored correctly");
-    test_assert(stats, strcmp(maintenanceDate[0], "2025-01-15") == 0, "Maintenance date stored correctly");
-    test_assert(stats, strcmp(maintenanceDetails[0], "Initial calibration") == 0,
-                "Maintenance details stored correctly");
+    size_t dir_len = strlen(tmpdir);
+    int needs_sep = 1;
+    if (dir_len > 0)
+    {
+        char last = tmpdir[dir_len - 1];
+        if (last == '/' || last == '\\')
+        {
+            needs_sep = 0;
+        }
+    }
 
-    record_result_t duplicate = add_record_direct("Duplicate", "1", "2025-02-01", "Should fail");
-    test_assert(stats, duplicate == RECORD_ERROR_DUPLICATE_ID, "Duplicate machine ID is rejected");
+    char template_buffer[CSV_PATH_MAX];
+    int written = 0;
+    if (needs_sep)
+    {
+        written = snprintf(template_buffer, sizeof(template_buffer), "%s%cmaintenance_e2e_XXXXXX.csv", tmpdir, '\\');
+    }
+    else
+    {
+        written = snprintf(template_buffer, sizeof(template_buffer), "%smaintenance_e2e_XXXXXX.csv", tmpdir);
+    }
+
+    if (written < 0 || (size_t)written >= sizeof(template_buffer))
+    {
+        return -1;
+    }
+
+    if (_mktemp_s(template_buffer, strlen(template_buffer) + 1) != 0)
+    {
+        return -1;
+    }
+
+    int final_written = snprintf(buffer, size, "%s", template_buffer);
+    if (final_written < 0 || (size_t)final_written >= size)
+    {
+        return -1;
+    }
+    return 0;
+#else
+    const char *tmpdir = getenv("TMPDIR");
+    if (!tmpdir || tmpdir[0] == '\0')
+    {
+        tmpdir = "/tmp";
+    }
+
+    size_t dir_len = strlen(tmpdir);
+    int needs_sep = 1;
+    if (dir_len > 0 && (tmpdir[dir_len - 1] == '/' || tmpdir[dir_len - 1] == '\\'))
+    {
+        needs_sep = 0;
+    }
+
+    char template_buffer[CSV_PATH_MAX];
+    int written = 0;
+    if (needs_sep)
+    {
+        written = snprintf(template_buffer, sizeof(template_buffer), "%s/maintenance_e2e_XXXXXX", tmpdir);
+    }
+    else
+    {
+        written = snprintf(template_buffer, sizeof(template_buffer), "%smaintenance_e2e_XXXXXX", tmpdir);
+    }
+
+    if (written < 0 || (size_t)written >= sizeof(template_buffer))
+    {
+        return -1;
+    }
+
+    int fd = mkstemp(template_buffer);
+    if (fd < 0)
+    {
+        return -1;
+    }
+    close(fd);
+
+    int final_written = snprintf(buffer, size, "%s.csv", template_buffer);
+    if (final_written < 0 || (size_t)final_written >= size)
+    {
+        remove(template_buffer);
+        return -1;
+    }
+
+    if (rename(template_buffer, buffer) != 0)
+    {
+        remove(template_buffer);
+        return -1;
+    }
+    return 0;
+#endif
 }
 
-static void run_unit_test_delete_machine(test_stats_t *stats)
-{
-    print_test_section_header("Unit Test: delete_machine");
-
-    clear_record_storage();
-
-    test_assert(stats, add_record_direct("Lathe", "10", "2025-03-10", "Lubricated gears") == RECORD_SUCCESS,
-                "Seed record 1");
-    test_assert(stats, add_record_direct("Drill Press", "11", "2025-03-11", "Adjusted spindle") == RECORD_SUCCESS,
-                "Seed record 2");
-
-    record_result_t delete_status = delete_record_direct("10");
-    test_assert(stats, delete_status == RECORD_SUCCESS, "delete_record_direct removes existing machine");
-    test_assert(stats, record_count == 1, "Record count decremented to 1");
-    test_assert(stats, strcmp(machineID[0], "11") == 0, "Remaining record shifted correctly");
-
-    record_result_t missing_delete = delete_record_direct("999");
-    test_assert(stats, missing_delete == RECORD_ERROR_NOT_FOUND, "Deleting unknown machine ID returns not found");
-}
-
-static void run_unit_tests(void)
-{
-    test_stats_t stats = {0, 0};
-
-    run_unit_test_add_machine(&stats);
-    run_unit_test_delete_machine(&stats);
-
-    printf("\nUnit tests summary: %d passed, %d failed, %d total\n",
-           stats.total - stats.failed, stats.failed, stats.total);
-}
-
-static void run_end_to_end_test(test_stats_t *stats)
+void run_end_to_end_test(test_stats_t *stats)
 {
     print_test_section_header("End-to-End Test: workflow");
 
     char original_path[CSV_PATH_MAX];
     snprintf(original_path, sizeof(original_path), "%s", maintenance_get_csv_path());
 
-    const char *test_path = "tests/runtime_e2e.csv";
-    remove(test_path);
-
-    if (maintenance_set_csv_path(test_path) != 0)
+    char scratch_path[CSV_PATH_MAX] = {0};
+    if (derive_scratch_csv_path(scratch_path, sizeof(scratch_path)) != 0)
     {
-        test_assert(stats, 0, "Switch to test CSV path");
+        test_assert(stats, 0, "Generate scratch CSV path");
+        return;
+    }
+
+    FILE *scratch = fopen(scratch_path, "w+");
+    test_assert(stats, scratch != NULL, "Open scratch CSV path");
+    if (!scratch)
+    {
+        remove(scratch_path);
         maintenance_set_csv_path(original_path);
         return;
     }
+    fclose(scratch);
+
+    int path_switched = 0;
+    if (maintenance_set_csv_path(scratch_path) != 0)
+    {
+        test_assert(stats, 0, "Switch to test CSV path");
+        goto cleanup;
+    }
+    path_switched = 1;
 
     clear_record_storage();
 
@@ -2823,33 +3020,35 @@ static void run_end_to_end_test(test_stats_t *stats)
     test_assert(stats, record_count == 1, "Final record count is 1");
     test_assert(stats, strcmp(machineName[0], "Laser Cutter") == 0, "Final record still correct");
 
-    remove(test_path);
+cleanup:
+    if (path_switched)
+    {
+        clear_record_storage();
+        int restore_status = maintenance_set_csv_path(original_path);
+        test_assert(stats, restore_status == 0, "Restore original CSV path");
+        if (restore_status == 0)
+        {
+            test_assert(stats, load_records() == 0, "Reload original data");
+        }
+        else
+        {
+            test_assert(stats, 0, "Reload original data");
+        }
+    }
+    else
+    {
+        maintenance_set_csv_path(original_path);
+    }
 
+    if (scratch_path[0] != '\0')
+    {
+        remove(scratch_path);
+    }
     clear_record_storage();
-    test_assert(stats, maintenance_set_csv_path(original_path) == 0, "Restore original CSV path");
-    test_assert(stats, load_records() == 0, "Reload original data");
 }
 
-static void run_end_to_end_tests(void)
-{
-    test_stats_t stats = {0, 0};
-    run_end_to_end_test(&stats);
+#endif /* UNIT_TEST */
 
-    printf("\nEnd-to-end summary: %d passed, %d failed, %d total\n",
-           stats.total - stats.failed, stats.failed, stats.total);
-}
-
-static void run_test_program(void)
-{
-    printf("\n==============================\n");
-    printf("Running built-in test program\n");
-    printf("==============================\n");
-
-    run_unit_tests();
-    run_end_to_end_tests();
-
-    printf("\nTest program finished.\n");
-}
 
 int safe_input(char *buffer, int size, const char *prompt)
 {
@@ -2969,7 +3168,7 @@ int read_menu_choice(void)
         int status = safe_input(buffer, sizeof(buffer), "Enter your choice : ");
         if (status == INPUT_EXIT)
         {
-            return 8;
+            return 9;
         }
         if (status == INPUT_BACK || status == INPUT_CANCELLED)
         {
@@ -2981,7 +3180,7 @@ int read_menu_choice(void)
         if (status == INPUT_ERROR)
         {
             printf("Input error detected. Exiting menu.\n");
-            return 8;
+            return 9;
         }
 
         if (status == INPUT_TOO_LONG)
@@ -2992,20 +3191,20 @@ int read_menu_choice(void)
         if (buffer[0] == '\0')
         {
             clear_console_output();
-            printf("Invalid choice. Please enter a number between 1 and 8.\n");
+            printf("Invalid choice. Please enter a number between 1 and 9.\n");
             display_menu();
             continue;
         }
 
         char *endptr = NULL;
         long value = strtol(buffer, &endptr, 10);
-        if (endptr != NULL && *endptr == '\0' && value >= 1 && value <= 8)
+        if (endptr != NULL && *endptr == '\0' && value >= 1 && value <= 9)
         {
             return (int)value;
         }
 
         clear_console_output();
-        printf("Invalid choice. Please enter a number between 1 and 8.\n");
+        printf("Invalid choice. Please enter a number between 1 and 9.\n");
         display_menu();
     }
 }
@@ -3045,7 +3244,7 @@ static void flush_line(void)
     }
 }
 
-static void clear_record_storage(void)
+static void UNUSED_FN clear_record_storage(void)
 {
     memset(machineName, 0, sizeof(machineName));
     memset(machineID, 0, sizeof(machineID));
@@ -3054,11 +3253,13 @@ static void clear_record_storage(void)
     record_count = 0;
 }
 
-static void handle_sigint(int signal)
+#ifndef UNIT_TEST
+static void UNUSED_FN handle_sigint(int signal)
 {
     (void)signal;
     request_exit();
 }
+#endif
 
 void sanitize_input(char *buffer)
 {

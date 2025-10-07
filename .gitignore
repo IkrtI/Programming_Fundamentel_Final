@@ -2,8 +2,10 @@ MachineManager
 maint
 maintenance.csv
 maintenance_large.csv
-*.exe
-*.o
+**/*.exe
+**/*.o
+tests/e2e_tests
+tests/unit_tests
 tests/test_validation
 .vscode/
 tests/test_end_to_end
