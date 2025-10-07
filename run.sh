@@ -1,5 +1,7 @@
-#!/bin/bash
+#!/bin/sh
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# gcc build
-gcc -std=c11 -O2 -Wall -Wextra -o maint main.c
-./maint
+"$SCRIPT_DIR/COMPILE"
+
+"$SCRIPT_DIR/maint"

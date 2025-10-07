@@ -36,6 +36,13 @@ gcc -std=c11 -Wall -Wextra -O2 -o maint main.c
 clang -std=c11 -Wall -Wextra -O2 -o maint main.c
 ```
 
+หรือใช้สคริปต์ `COMPILE` / `COMPILE.bat` ที่เตรียมไว้เพื่อสร้างทั้งไบนารีหลักและไฟล์ทดสอบภายใน:
+
+```bash
+./COMPILE          # Linux / macOS
+COMPILE.bat        # Windows
+```
+
 ### ตัวเลือกเพิ่มเติม (ไม่บังคับ)
 - เพิ่ม `-g` หากต้องการ debug symbols
 - เพิ่ม `-fsanitize=address` (เฉพาะ Linux/macOS) เพื่อตรวจจับ memory error ระหว่างพัฒนา
@@ -80,10 +87,20 @@ maint.exe        # บน Windows
 
 ต้องมีไฟล์ `maintenance.csv` หรือสร้างไฟล์ใหม่ผ่านเมนูในโปรแกรม
 
-สำหรับการรันทดสอบอัตโนมัติ ให้ใช้สคริปต์ที่เตรียมไว้:
+### การรันทดสอบภายใน
+
+เมื่อใช้สคริปต์ `COMPILE` / `COMPILE.bat` จะได้ไฟล์ `maint_tests` (หรือ `maint_tests.exe`) สำหรับรันทดสอบในโปรเซสเดียวกับโปรแกรมหลัก:
+
+```bash
+./maint_tests --run-unit-tests
+./maint_tests --run-e2e-tests
+```
+
+ยังสามารถใช้สคริปต์ดั้งเดิมในโฟลเดอร์ `tests/` ซึ่งจะคอมไพล์ด้วยแฟล็กทดสอบให้โดยอัตโนมัติ:
 
 ```bash
 ./tests/run_unit_tests.sh
+./tests/run_e2e_tests.sh
 ```
 
 ## 7. แก้ไขปัญหาที่พบบ่อย

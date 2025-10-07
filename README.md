@@ -30,17 +30,45 @@ Machine Maintenance Manager
 
 ### Build
 
-คอมไพล์ด้วย GCC (รองรับ Linux / macOS / Windows):
+สำหรับ Linux / macOS สามารถใช้สคริปต์ `COMPILE` เพื่อสร้างทั้งไบนารีหลักและชุดทดสอบภายในในคำสั่งเดียว:
+
+```bash
+./COMPILE
+```
+
+บน Windows ให้เรียก `COMPILE.bat` แทน (ภายในจะใช้ MinGW-w64 หรือ MSYS2 GCC):
+
+```bat
+COMPILE.bat
+```
+
+หากต้องการคอมไพล์เองด้วยคำสั่งเดิมก็ยังใช้ได้:
 
 ```bash
 gcc -std=c11 -Wall -Wextra -O2 -o maint main.c
 ```
+
+ทั้งสองสคริปต์จะสร้างไฟล์:
+
+- `maint` หรือ `maint.exe` สำหรับรันโปรแกรมปกติ
+- `maint_tests` หรือ `maint_tests.exe` สำหรับรันชุดทดสอบในโปรเซสเดียวกับโปรแกรมหลัก
 
 ### Run
 
 ```bash
 ./maint         # หรือ maint.exe บน Windows
 ```
+
+### Run automated tests
+
+เมื่อมีไฟล์ `maint_tests` แล้ว สามารถรันชุดทดสอบได้โดยตรง (ไม่ต้องเรียกสคริปต์ภายนอก):
+
+```bash
+./maint_tests --run-unit-tests
+./maint_tests --run-e2e-tests
+```
+
+ยังคงมีสคริปต์ `tests/run_unit_tests.*` และ `tests/run_e2e_tests.*` ให้ใช้ใน CI หรือการพัฒนา ซึ่งจะเรียกคอมไพล์ด้วยแฟล็กที่จำเป็นให้อัตโนมัติ
 
 เมื่อรันโปรแกรมจะพบเมนูจัดการไฟล์ CSV ก่อนเข้าสู่เมนูหลัก:
 
