@@ -50,37 +50,11 @@ gcc -std=c11 -Wall -Wextra -O2 -DENABLE_INTERNAL_TESTS -I. -o maint main.c
 
 ค่าเริ่มต้นจะสร้างไฟล์ปฏิบัติการหลัก `maint` (หรือ `maint.exe`)
 
-> ✅ เมนู **Test program** และไบนารี `maint_tests` จะพร้อมใช้งานโดยอัตโนมัติ เพราะคำสั่งคอมไพล์ทั้งหมดในโปรเจกต์เปิดแฟล็ก `-DENABLE_INTERNAL_TESTS` ให้อยู่แล้ว (ดูตัวอย่างเพิ่มเติมในหัวข้อ [Run automated tests](#run-automated-tests))
-
 ### Run
 
 ```bash
 ./maint         # หรือ maint.exe บน Windows
 ```
-
-### Run automated tests
-
-คอมไพล์ไฟล์ทดสอบในโปรเซสเดียวกันด้วยคำสั่ง:
-
-```bash
-gcc -std=c11 -Wall -Wextra -O2 -DENABLE_INTERNAL_TESTS -I. -o maint_tests main.c
-```
-
-เมื่อมีไฟล์ `maint_tests` แล้ว สามารถรันชุดทดสอบได้โดยตรง (ไม่ต้องเรียกสคริปต์ภายนอก):
-
-```bash
-./maint_tests --run-unit-tests
-./maint_tests --run-e2e-tests
-```
-
-ยังคงมีสคริปต์ `tests/run_unit_tests.*` และ `tests/run_e2e_tests.*` ให้ใช้ใน CI หรือการพัฒนา ซึ่งจะคอมไพล์ `main.c` พร้อมแฟล็ก `-DENABLE_INTERNAL_TESTS` ให้อัตโนมัติ
-
-เมื่อรันโปรแกรมจะพบเมนูจัดการไฟล์ CSV ก่อนเข้าสู่เมนูหลัก:
-
-- โปรแกรมจะแสดงรายชื่อไฟล์ `*.csv` ใน working directory พร้อมหมายเลข 1, 2, 3, ...
-- พิมพ์หมายเลขเพื่อเลือกไฟล์, กด `A` เพื่อระบุพาธเอง, `N` เพื่อสร้างไฟล์ใหม่จากหัวตารางว่าง, หรือ `C` เพื่อคัดลอกไฟล์ที่เลือกไปยังชื่อใหม่
-- กด `Q` (หรือกด Ctrl+X เพื่อยกเลิกอินพุต) เพื่อคงค่าไฟล์เดิมและเข้าสู่เมนูหลัก
-- เมื่อสร้างหรือคัดลอกไฟล์ใหม่ โปรแกรมจะโหลดข้อมูลล่าสุดให้อัตโนมัติ
 
 ## 🖥️ User Interface Preview
 
