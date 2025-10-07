@@ -111,9 +111,10 @@ Machine Maintenance Manager
 3. Search record
 4. Update record
 5. Delete record
-6. Manage deleted records
-7. Add-on tools
-8. Test program
+6. Add-on tools
+---------
+7. Run unit tests
+8. Run end-to-end tests
 9. Exit
 Enter your choice : 
 ```
@@ -124,19 +125,15 @@ Enter your choice :
 - **บรรทัดหัวตาราง:**
 
   ```csv
-  MachineName,MachineID,MaintenanceDate,MaintenanceDetails,Active
+  MachineName,MachineID,MaintenanceDate,MaintenanceDetails
   ```
 
 - **ตัวอย่างข้อมูล:**
 
   ```csv
-  Hydraulic Press,HP-001,2025-08-01,Changed hydraulic fluid,1
-  CNC Mill,CNC-12,2025-08-03,Spindle alignment and lubrication,1
-  Laser Cutter,LC-07,2025-08-05,Replaced air filter,1
+  Hydraulic Press,HP-001,2025-08-01,Changed hydraulic fluid
+  CNC Mill,CNC-12,2025-08-03,Spindle alignment and lubrication
+  Laser Cutter,LC-07,2025-08-05,Replaced air filter
   ```
 
 > หมายเหตุ: โครงสร้าง CSV ต้องตรงตามตัวอย่างเพื่อให้โปรแกรมอ่านและเขียนข้อมูลได้ถูกต้อง
-
-## 🚀 Continuous Integration & Releases
-
-รีลีสที่เผยแพร่บน GitHub จะถูกสร้างผ่าน workflow อัตโนมัติที่คอมไพล์ไบนารีสำหรับ Linux, macOS และ Windows จากนั้นรันทั้งชุด **unit tests** และ **end-to-end tests** โดยบันทึกผลลัพธ์ไว้ในไฟล์ `.txt` ต่อแพลตฟอร์ม ก่อนจะแนบไฟล์ไบนารีและผลการทดสอบทั้งหมดเข้าไปในรีลีสเดียวกัน คุณจึงสามารถตรวจสอบทั้ง build artifact และหลักฐานการทดสอบของแต่ละเวอร์ชันได้จากหน้ารีลีสทันที
