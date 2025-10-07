@@ -6,7 +6,7 @@
 
 | แพลตฟอร์ม | คอมไพเลอร์ที่แนะนำ | วิธีติดตั้ง |
 |-----------|---------------------|-------------|
-| Linux / macOS | [GCC](https://gcc.gnu.org/) หรือ [Clang](https://clang.llvm.org/) | ใช้ตัวจัดการแพ็กเกจ เช่น `sudo apt install build-essential`, `brew install gcc` |
+| Linux / macOS | [GCC](https://gcc.gnu.org/) | ใช้ตัวจัดการแพ็กเกจ เช่น `sudo apt install build-essential`, `brew install gcc` |
 | Windows | [MinGW-w64](http://mingw-w64.org/) หรือ [MSYS2](https://www.msys2.org/) | ติดตั้ง MSYS2 แล้วรัน `pacman -S --needed base-devel mingw-w64-x86_64-gcc` |
 
 > หมายเหตุ: ต้องมีเครื่องมือบรรทัดคำสั่ง (เช่น Terminal, PowerShell, หรือ MSYS2 MinGW shell) เพื่อรันคำสั่งคอมไพล์
@@ -37,12 +37,6 @@ gcc -std=c11 -Wall -Wextra -O2 -DENABLE_INTERNAL_TESTS -I. -o maint main.c
 build.bat           # Windows
 ```
 
-หากใช้ Clang แทน GCC สามารถสลับชื่อคอมไพเลอร์ โดยยังคงต้องระบุแฟล็ก `-DENABLE_INTERNAL_TESTS`:
-
-```bash
-clang -std=c11 -Wall -Wextra -O2 -DENABLE_INTERNAL_TESTS -I. -o maint main.c
-```
-
 ### ตัวเลือกเพิ่มเติม (ไม่บังคับ)
 - เพิ่ม `-g` หากต้องการ debug symbols
 - เพิ่ม `-fsanitize=address` (เฉพาะ Linux/macOS) เพื่อตรวจจับ memory error ระหว่างพัฒนา
@@ -59,7 +53,7 @@ x86_64-w64-mingw32-gcc -std=c11 -Wall -Wextra -O2 -DENABLE_INTERNAL_TESTS -I. -o
 
 ## 5. การคอมไพล์แบบข้ามแพลตฟอร์มผ่าน CMake (ทางเลือก)
 
-หากต้องการระบบ build ที่ยืดหยุ่น สามารถใช้ CMake ควบคู่กับ GCC/Clang:
+หากต้องการระบบ build ที่ยืดหยุ่น สามารถใช้ CMake ควบคู่กับ GCC:
 
 1. สร้างไฟล์ `CMakeLists.txt` (มีตัวอย่างใน README) หรือใช้ตัวอย่างด้านล่าง:
    ```cmake
