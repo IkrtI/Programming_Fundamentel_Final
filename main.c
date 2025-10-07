@@ -31,12 +31,13 @@
 
 static char csv_file_path[CSV_PATH_MAX] = CSV_FILE_DEFAULT;
 static const char *SAMPLE_CSV_FILE = "maintenance-example.csv";
-static const char CSV_HEADER[] = "MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n";
+static const char CSV_HEADER[] = "MachineName,MachineID,MaintenanceDate,MaintenanceDetails,Active\n";
 
 char machineName[MAX_RECORDS][MAX_NAME];
 char machineID[MAX_RECORDS][MAX_ID];
 char maintenanceDate[MAX_RECORDS][MAX_DATE];
 char maintenanceDetails[MAX_RECORDS][MAX_DETAILS];
+int recordActive[MAX_RECORDS];
 int record_count = 0;
 
 typedef enum record_result
@@ -52,6 +53,7 @@ static record_result_t add_record_direct(const char *name, const char *id,
                                          const char *date, const char *details);
 static record_result_t delete_record_direct(const char *id);
 static void run_test_program(void);
+static int create_temp_csv_path(char *buffer, size_t size);
 
 static volatile sig_atomic_t interrupt_requested = 0;
 static volatile sig_atomic_t exit_requested = 0;
@@ -86,7 +88,8 @@ static void print_record_table_header(void);
 static void print_record_table_footer(void);
 static void print_record_table_row(int index);
 static void print_record_preview_from_values(const char *name, const char *id,
-                                             const char *date, const char *details);
+                                             const char *date, const char *details, int active);
+static const char *record_status_string(int active);
 static int get_terminal_height(void);
 static int calculate_records_per_page(void);
 static void clear_console_output(void);
@@ -1219,6 +1222,7 @@ static void resequence_machine_ids(void)
     char new_names[MAX_RECORDS][MAX_NAME];
     char new_dates[MAX_RECORDS][MAX_DATE];
     char new_details[MAX_RECORDS][MAX_DETAILS];
+    int new_active[MAX_RECORDS];
 
     for (int pos = 0; pos < record_count; ++pos)
     {
@@ -1226,6 +1230,7 @@ static void resequence_machine_ids(void)
         snprintf(new_names[pos], MAX_NAME, "%.*s", MAX_NAME - 1, machineName[src]);
         snprintf(new_dates[pos], MAX_DATE, "%.*s", MAX_DATE - 1, maintenanceDate[src]);
         snprintf(new_details[pos], MAX_DETAILS, "%.*s", MAX_DETAILS - 1, maintenanceDetails[src]);
+        new_active[pos] = recordActive[src];
     }
 
     for (int i = 0; i < record_count; ++i)
@@ -1233,6 +1238,7 @@ static void resequence_machine_ids(void)
         snprintf(machineName[i], MAX_NAME, "%.*s", MAX_NAME - 1, new_names[i]);
         snprintf(maintenanceDate[i], MAX_DATE, "%.*s", MAX_DATE - 1, new_dates[i]);
         snprintf(maintenanceDetails[i], MAX_DETAILS, "%.*s", MAX_DETAILS - 1, new_details[i]);
+        recordActive[i] = new_active[i];
 
         int written = snprintf(machineID[i], MAX_ID, "%d", i + 1);
         if (written < 0 || written >= MAX_ID)
@@ -1256,27 +1262,33 @@ static void resequence_machine_ids(void)
 
 static void print_record_table_header(void)
 {
-    printf("+----------------------+--------------+--------------+--------------------------------+\n");
-    printf("| Machine Name         | Machine ID   | Date         | Details                        |\n");
-    printf("+----------------------+--------------+--------------+--------------------------------+\n");
+    printf("+----------------------+--------------+--------------+--------------------------------+---------+\n");
+    printf("| Machine Name         | Machine ID   | Date         | Details                        | Status  |\n");
+    printf("+----------------------+--------------+--------------+--------------------------------+---------+\n");
+}
+
+static const char *record_status_string(int active)
+{
+    return active ? "Active" : "Deleted";
 }
 
 static void print_record_table_row(int index)
 {
-    printf("| %-20.20s | %-12.12s | %-12.12s | %-30.30s |\n",
+    printf("| %-20.20s | %-12.12s | %-12.12s | %-30.30s | %-7.7s |\n",
            machineName[index],
            machineID[index],
            maintenanceDate[index],
-           maintenanceDetails[index]);
+           maintenanceDetails[index],
+           record_status_string(recordActive[index]));
 }
 
 static void print_record_table_footer(void)
 {
-    printf("+----------------------+--------------+--------------+--------------------------------+\n");
+    printf("+----------------------+--------------+--------------+--------------------------------+---------+\n");
 }
 
 static void print_record_preview_from_values(const char *name, const char *id,
-                                             const char *date, const char *details)
+                                             const char *date, const char *details, int active)
 {
     const char *safe_name = name ? name : "";
     const char *safe_id = id ? id : "";
@@ -1284,11 +1296,12 @@ static void print_record_preview_from_values(const char *name, const char *id,
     const char *safe_details = details ? details : "";
 
     print_record_table_header();
-    printf("| %-20.20s | %-12.12s | %-12.12s | %-30.30s |\n",
+    printf("| %-20.20s | %-12.12s | %-12.12s | %-30.30s | %-7.7s |\n",
            safe_name,
            safe_id,
            safe_date,
-           safe_details);
+           safe_details,
+           record_status_string(active));
     print_record_table_footer();
 }
 
@@ -1784,14 +1797,22 @@ int main(void)
             should_clear_log = 1;
             break;
         case 6:
-            handle_addon_menu();
+            manage_deleted_records();
+            if (!exit_requested && !interrupt_requested && save_all_records() == 0)
+            {
+                reload_records_with_warning();
+            }
             should_clear_log = 1;
             break;
         case 7:
-            run_test_program();
+            handle_addon_menu();
             should_clear_log = 1;
             break;
         case 8:
+            run_test_program();
+            should_clear_log = 1;
+            break;
+        case 9:
             printf("Exiting...\n");
             exit_requested = 1;
             break;
@@ -1803,7 +1824,7 @@ int main(void)
         {
             clear_function_log();
         }
-    } while (!exit_requested && choice != 8);
+    } while (!exit_requested && choice != 9);
 
     if (exit_requested && interrupt_requested)
     {
@@ -1823,9 +1844,10 @@ void display_menu(void)
     printf("3. Search record\n");
     printf("4. Update record\n");
     printf("5. Delete record\n");
-    printf("6. Add-on tools\n");
-    printf("7. Test program\n");
-    printf("8. Exit\n");
+    printf("6. Manage deleted records\n");
+    printf("7. Add-on tools\n");
+    printf("8. Test program\n");
+    printf("9. Exit\n");
 }
 #endif
 
@@ -2039,12 +2061,29 @@ int load_records(void)
 
     record_count = 0;
     int overflow_detected = 0;
-    while (1)
+    char line[1024];
+    while (fgets(line, sizeof(line), file))
     {
-        char n[MAX_NAME], id[MAX_ID], d[MAX_DATE], det[MAX_DETAILS];
-        int matched = fscanf(file, " %63[^,],%31[^,],%15[^,],%255[^\n]\n", n, id, d, det);
-        if (matched != 4)
-            break;
+        line[strcspn(line, "\r\n")] = '\0';
+        if (line[0] == '\0')
+        {
+            continue;
+        }
+
+        char *fields[5] = {0};
+        int field_count = 0;
+        char *token = strtok(line, ",");
+        while (token && field_count < 5)
+        {
+            trim_whitespace(token);
+            fields[field_count++] = token;
+            token = strtok(NULL, ",");
+        }
+
+        if (field_count < 4)
+        {
+            continue;
+        }
 
         if (is_record_storage_full())
         {
@@ -2052,10 +2091,27 @@ int load_records(void)
             continue;
         }
 
-        snprintf(machineName[record_count], MAX_NAME, "%s", n);
+        const char *name = fields[0] ? fields[0] : "";
+        const char *id = fields[1] ? fields[1] : "";
+        const char *date = fields[2] ? fields[2] : "";
+        const char *details = fields[3] ? fields[3] : "";
+
+        int active = 1;
+        if (field_count >= 5 && fields[4])
+        {
+            char *endptr = NULL;
+            long value = strtol(fields[4], &endptr, 10);
+            if (endptr && *endptr == '\0')
+            {
+                active = (value != 0);
+            }
+        }
+
+        snprintf(machineName[record_count], MAX_NAME, "%s", name);
         snprintf(machineID[record_count], MAX_ID, "%s", id);
-        snprintf(maintenanceDate[record_count], MAX_DATE, "%s", d);
-        snprintf(maintenanceDetails[record_count], MAX_DETAILS, "%s", det);
+        snprintf(maintenanceDate[record_count], MAX_DATE, "%s", date);
+        snprintf(maintenanceDetails[record_count], MAX_DETAILS, "%s", details);
+        recordActive[record_count] = active ? 1 : 0;
 
         record_count++;
     }
@@ -2087,8 +2143,8 @@ int save_all_records(void)
     fputs(CSV_HEADER, file);
     for (int i = 0; i < record_count; ++i)
     {
-        fprintf(file, "%s,%s,%s,%s\n",
-                machineName[i], machineID[i], maintenanceDate[i], maintenanceDetails[i]);
+        fprintf(file, "%s,%s,%s,%s,%d\n",
+                machineName[i], machineID[i], maintenanceDate[i], maintenanceDetails[i], recordActive[i] ? 1 : 0);
     }
 
     if (fclose(file) != 0)
@@ -2101,9 +2157,26 @@ int save_all_records(void)
 
 void display_records(void)
 {
-    if (record_count == 0)
+    int active_indices[MAX_RECORDS];
+    int active_count = 0;
+    for (int i = 0; i < record_count; ++i)
     {
-        printf("No maintenance records.\n");
+        if (recordActive[i])
+        {
+            active_indices[active_count++] = i;
+        }
+    }
+
+    if (active_count == 0)
+    {
+        if (record_count == 0)
+        {
+            printf("No maintenance records.\n");
+        }
+        else
+        {
+            printf("No active maintenance records.\n");
+        }
         return;
     }
 
@@ -2113,7 +2186,7 @@ void display_records(void)
         records_per_page = 1;
     }
 
-    int total_pages = (record_count + records_per_page - 1) / records_per_page;
+    int total_pages = (active_count + records_per_page - 1) / records_per_page;
     int current_page = 0;
     char status_message[128];
     status_message[0] = '\0';
@@ -2126,30 +2199,31 @@ void display_records(void)
         }
 
         int start_index = current_page * records_per_page;
-        if (start_index >= record_count)
+        if (start_index >= active_count)
         {
             current_page = (total_pages > 0) ? (total_pages - 1) : 0;
             start_index = current_page * records_per_page;
         }
 
         int end_index = start_index + records_per_page;
-        if (end_index > record_count)
+        if (end_index > active_count)
         {
-            end_index = record_count;
+            end_index = active_count;
         }
 
         printf("\n");
         print_record_table_header();
         for (int i = start_index; i < end_index; ++i)
         {
-            print_record_table_row(i);
+            int record_index = active_indices[i];
+            print_record_table_row(record_index);
         }
         print_record_table_footer();
 
         printf("Records %d-%d of %d | Page %d/%d\n",
                start_index + 1,
                end_index,
-               record_count,
+               active_count,
                current_page + 1,
                total_pages);
 
@@ -2312,6 +2386,7 @@ static record_result_t add_record_direct(const char *name, const char *id,
         return RECORD_ERROR_INVALID_DATA;
     }
 
+    recordActive[record_count] = 1;
     record_count++;
     return RECORD_SUCCESS;
 }
@@ -2333,6 +2408,7 @@ static record_result_t delete_record_direct(const char *id)
                 memmove(machineID[j], machineID[j + 1], sizeof(machineID[j]));
                 memmove(maintenanceDate[j], maintenanceDate[j + 1], sizeof(maintenanceDate[j]));
                 memmove(maintenanceDetails[j], maintenanceDetails[j + 1], sizeof(maintenanceDetails[j]));
+                recordActive[j] = recordActive[j + 1];
             }
 
             if (record_count > 0)
@@ -2342,6 +2418,7 @@ static record_result_t delete_record_direct(const char *id)
                 memset(machineID[last], 0, sizeof(machineID[last]));
                 memset(maintenanceDate[last], 0, sizeof(maintenanceDate[last]));
                 memset(maintenanceDetails[last], 0, sizeof(maintenanceDetails[last]));
+                recordActive[last] = 0;
             }
 
             record_count--;
@@ -2429,7 +2506,7 @@ void add_record(void)
     }
 
     printf("\nNew record preview:\n");
-    print_record_preview_from_values(name, id, date, details);
+    print_record_preview_from_values(name, id, date, details, 1);
 
     int confirmed = 0;
     int confirm_status = prompt_confirmation("Do you want to continue? [Y/n] ", &confirmed);
@@ -2475,6 +2552,11 @@ void search_records(void)
     int header_printed = 0;
     for (int i = 0; i < record_count; ++i)
     {
+        if (!recordActive[i])
+        {
+            continue;
+        }
+
         if (string_contains_case_insensitive(machineName[i], q) ||
             string_contains_case_insensitive(machineID[i], q))
         {
@@ -2515,6 +2597,12 @@ void update_record(void)
     {
         if (strcmp(machineID[i], id) == 0)
         {
+            if (!recordActive[i])
+            {
+                printf("Record with Machine ID '%s' has been deleted. Recover it before updating.\n", id);
+                return;
+            }
+
             char new_name[MAX_NAME];
             char new_date[MAX_DATE];
             char new_details[MAX_DETAILS];
@@ -2602,7 +2690,7 @@ void update_record(void)
             print_record_table_footer();
 
             printf("\nUpdated record preview:\n");
-            print_record_preview_from_values(new_name, machineID[i], new_date, new_details);
+            print_record_preview_from_values(new_name, machineID[i], new_date, new_details, recordActive[i]);
 
             int confirmed = 0;
             int confirm_status = prompt_confirmation("Do you want to continue? [Y/n] ", &confirmed);
@@ -2665,8 +2753,112 @@ void delete_record(void)
     print_record_table_row(target_index);
     print_record_table_footer();
 
+    if (recordActive[target_index])
+    {
+        int confirmed = 0;
+        int confirm_status = prompt_confirmation("Do you want to archive this record? [Y/n] ", &confirmed);
+        if (confirm_status != INPUT_OK)
+        {
+            if (handle_prompt_result(confirm_status, "Error reading confirmation."))
+            {
+                return;
+            }
+            return;
+        }
+
+        if (!confirmed)
+        {
+            print_cancel_message();
+            return;
+        }
+
+        recordActive[target_index] = 0;
+        printf("Record marked as deleted. Use the deleted records menu to recover or remove it permanently.\n");
+        return;
+    }
+
+    printf("This record has already been deleted.\n");
+    printf("1. Recover this record\n");
+    printf("2. Permanently delete this record\n");
+    printf("3. Cancel\n");
+
+    int option = 0;
+    while (1)
+    {
+        char buffer[16];
+        int status = safe_input(buffer, sizeof(buffer), "Select an option : ");
+        if (status == INPUT_TOO_LONG)
+        {
+            continue;
+        }
+
+        if (status == INPUT_CANCELLED || status == INPUT_BACK)
+        {
+            print_cancel_message();
+            return;
+        }
+
+        if (status == INPUT_EXIT)
+        {
+            request_exit();
+            return;
+        }
+
+        if (status != INPUT_OK)
+        {
+            printf("Invalid choice. Please enter 1, 2, or 3.\n");
+            continue;
+        }
+
+        if (buffer[0] == '\0')
+        {
+            printf("Invalid choice. Please enter 1, 2, or 3.\n");
+            continue;
+        }
+
+        char *endptr = NULL;
+        long value = strtol(buffer, &endptr, 10);
+        if (endptr && *endptr == '\0' && value >= 1 && value <= 3)
+        {
+            option = (int)value;
+            break;
+        }
+
+        printf("Invalid choice. Please enter 1, 2, or 3.\n");
+    }
+
+    if (option == 3)
+    {
+        print_cancel_message();
+        return;
+    }
+
+    if (option == 1)
+    {
+        int confirmed = 0;
+        int confirm_status = prompt_confirmation("Recover this record? [Y/n] ", &confirmed);
+        if (confirm_status != INPUT_OK)
+        {
+            if (handle_prompt_result(confirm_status, "Error reading confirmation."))
+            {
+                return;
+            }
+            return;
+        }
+
+        if (!confirmed)
+        {
+            print_cancel_message();
+            return;
+        }
+
+        recordActive[target_index] = 1;
+        printf("Record recovered.\n");
+        return;
+    }
+
     int confirmed = 0;
-    int confirm_status = prompt_confirmation("Do you want to continue? [Y/n] ", &confirmed);
+    int confirm_status = prompt_confirmation("Permanently delete this record? [Y/n] ", &confirmed);
     if (confirm_status != INPUT_OK)
     {
         if (handle_prompt_result(confirm_status, "Error reading confirmation."))
@@ -2685,13 +2877,171 @@ void delete_record(void)
     record_result_t delete_status = delete_record_direct(id);
     if (delete_status == RECORD_SUCCESS)
     {
-        printf("Record deleted.\n");
+        printf("Record permanently deleted.\n");
         return;
     }
 
-    if (delete_status == RECORD_ERROR_NOT_FOUND)
+    printf("Unable to delete record.\n");
+}
+
+void manage_deleted_records(void)
+{
+    int deleted_indices[MAX_RECORDS];
+    int deleted_count = 0;
+    int status = 0;
+
+    for (int i = 0; i < record_count; ++i)
     {
-        printf("No record with Machine ID '%s'.\n", id);
+        if (!recordActive[i])
+        {
+            deleted_indices[deleted_count++] = i;
+        }
+    }
+
+    if (deleted_count == 0)
+    {
+        printf("No deleted records available.\n");
+        return;
+    }
+
+    print_record_table_header();
+    for (int i = 0; i < deleted_count; ++i)
+    {
+        print_record_table_row(deleted_indices[i]);
+    }
+    print_record_table_footer();
+
+    printf("\nDeleted Records Menu\n");
+    printf("1. Recover a record\n");
+    printf("2. Permanently delete a record\n");
+    printf("3. Cancel\n");
+
+    int option = 0;
+    while (1)
+    {
+        char buffer[16];
+        int status = safe_input(buffer, sizeof(buffer), "Select an option : ");
+        if (status == INPUT_TOO_LONG)
+        {
+            continue;
+        }
+
+        if (status == INPUT_CANCELLED || status == INPUT_BACK)
+        {
+            print_cancel_message();
+            return;
+        }
+
+        if (status == INPUT_EXIT)
+        {
+            request_exit();
+            return;
+        }
+
+        if (status != INPUT_OK)
+        {
+            printf("Invalid choice. Please enter 1, 2, or 3.\n");
+            continue;
+        }
+
+        if (buffer[0] == '\0')
+        {
+            printf("Invalid choice. Please enter 1, 2, or 3.\n");
+            continue;
+        }
+
+        char *endptr = NULL;
+        long value = strtol(buffer, &endptr, 10);
+        if (endptr && *endptr == '\0' && value >= 1 && value <= 3)
+        {
+            option = (int)value;
+            break;
+        }
+
+        printf("Invalid choice. Please enter 1, 2, or 3.\n");
+    }
+
+    if (option == 3)
+    {
+        print_cancel_message();
+        return;
+    }
+
+    char selected_id[MAX_ID];
+    status = prompt_with_validation(selected_id, MAX_ID, "Enter machine ID: ",
+                                    is_valid_machine_id,
+                                    "Machine ID may only contain letters, numbers, '-', '_' or '.'.");
+    if (handle_prompt_result(status, "Error reading machine ID."))
+    {
+        return;
+    }
+
+    int target_index = -1;
+    for (int i = 0; i < record_count; ++i)
+    {
+        if (!recordActive[i] && strcmp(machineID[i], selected_id) == 0)
+        {
+            target_index = i;
+            break;
+        }
+    }
+
+    if (target_index < 0)
+    {
+        printf("No deleted record with Machine ID '%s'.\n", selected_id);
+        return;
+    }
+
+    printf("\nSelected record:\n");
+    print_record_table_header();
+    print_record_table_row(target_index);
+    print_record_table_footer();
+
+    if (option == 1)
+    {
+        int confirmed = 0;
+        int confirm_status = prompt_confirmation("Recover this record? [Y/n] ", &confirmed);
+        if (confirm_status != INPUT_OK)
+        {
+            if (handle_prompt_result(confirm_status, "Error reading confirmation."))
+            {
+                return;
+            }
+            return;
+        }
+
+        if (!confirmed)
+        {
+            print_cancel_message();
+            return;
+        }
+
+        recordActive[target_index] = 1;
+        printf("Record recovered.\n");
+        return;
+    }
+
+    int confirmed = 0;
+    int confirm_status = prompt_confirmation("Permanently delete this record? [Y/n] ", &confirmed);
+    if (confirm_status != INPUT_OK)
+    {
+        if (handle_prompt_result(confirm_status, "Error reading confirmation."))
+        {
+            return;
+        }
+        return;
+    }
+
+    if (!confirmed)
+    {
+        print_cancel_message();
+        return;
+    }
+
+    record_result_t delete_status = delete_record_direct(selected_id);
+    if (delete_status == RECORD_SUCCESS)
+    {
+        printf("Record permanently deleted.\n");
         return;
     }
 
@@ -2778,6 +3128,45 @@ static void run_unit_tests(void)
            stats.total - stats.failed, stats.failed, stats.total);
 }
 
+static int create_temp_csv_path(char *buffer, size_t size)
+{
+    if (!buffer || size == 0)
+    {
+        return -1;
+    }
+
+#ifdef _WIN32
+    char tmp_path[L_tmpnam_s];
+    if (tmpnam_s(tmp_path, L_tmpnam_s) != 0)
+    {
+        return -1;
+    }
+    int written = snprintf(buffer, size, "%s.csv", tmp_path);
+#else
+    char tmp_path[L_tmpnam];
+    if (tmpnam(tmp_path) == NULL)
+    {
+        return -1;
+    }
+    int written = snprintf(buffer, size, "%s.csv", tmp_path);
+#endif
+
+    if (written < 0 || (size_t)written >= size)
+    {
+        return -1;
+    }
+
+    FILE *probe = fopen(buffer, "w");
+    if (!probe)
+    {
+        buffer[0] = '\0';
+        return -1;
+    }
+
+    fclose(probe);
+    return 0;
+}
+
 static void run_end_to_end_test(test_stats_t *stats)
 {
     print_test_section_header("End-to-End Test: workflow");
@@ -2785,12 +3174,20 @@ static void run_end_to_end_test(test_stats_t *stats)
     char original_path[CSV_PATH_MAX];
     snprintf(original_path, sizeof(original_path), "%s", maintenance_get_csv_path());
 
-    const char *test_path = "tests/runtime_e2e.csv";
-    remove(test_path);
-
-    if (maintenance_set_csv_path(test_path) != 0)
+    char test_path[CSV_PATH_MAX];
+    int temp_status = create_temp_csv_path(test_path, sizeof(test_path));
+    test_assert(stats, temp_status == 0, "Create temporary CSV path");
+    if (temp_status != 0)
     {
-        test_assert(stats, 0, "Switch to test CSV path");
+        test_assert(stats, maintenance_set_csv_path(original_path) == 0, "Restore original CSV path");
+        return;
+    }
+
+    int path_status = maintenance_set_csv_path(test_path);
+    test_assert(stats, path_status == 0, "Switch to test CSV path");
+    if (path_status != 0)
+    {
+        remove(test_path);
         maintenance_set_csv_path(original_path);
         return;
     }
@@ -2881,9 +3278,11 @@ int safe_input(char *buffer, int size, const char *prompt)
     }
 
     int truncated = (strchr(buffer, '\n') == NULL);
+    int overflowed = truncated && !feof(stdin);
+
     if (contains_cancel_signal(buffer))
     {
-        if (truncated)
+        if (overflowed)
         {
             flush_line();
         }
@@ -2893,7 +3292,7 @@ int safe_input(char *buffer, int size, const char *prompt)
 
     if (contains_back_signal(buffer))
     {
-        if (truncated)
+        if (overflowed)
         {
             flush_line();
         }
@@ -2903,8 +3302,9 @@ int safe_input(char *buffer, int size, const char *prompt)
 
     sanitize_input(buffer);
 
-    if (truncated)
+    if (overflowed)
     {
+        flush_line();
         printf("Input too long. Maximum length is %d characters.\n", size - 1);
         buffer[0] = '\0';
         return INPUT_TOO_LONG;
@@ -2969,7 +3369,7 @@ int read_menu_choice(void)
         int status = safe_input(buffer, sizeof(buffer), "Enter your choice : ");
         if (status == INPUT_EXIT)
         {
-            return 8;
+            return 9;
         }
         if (status == INPUT_BACK || status == INPUT_CANCELLED)
         {
@@ -2981,7 +3381,7 @@ int read_menu_choice(void)
         if (status == INPUT_ERROR)
         {
             printf("Input error detected. Exiting menu.\n");
-            return 8;
+            return 9;
         }
 
         if (status == INPUT_TOO_LONG)
@@ -2992,20 +3392,20 @@ int read_menu_choice(void)
         if (buffer[0] == '\0')
         {
             clear_console_output();
-            printf("Invalid choice. Please enter a number between 1 and 8.\n");
+            printf("Invalid choice. Please enter a number between 1 and 9.\n");
             display_menu();
             continue;
         }
 
         char *endptr = NULL;
         long value = strtol(buffer, &endptr, 10);
-        if (endptr != NULL && *endptr == '\0' && value >= 1 && value <= 8)
+        if (endptr != NULL && *endptr == '\0' && value >= 1 && value <= 9)
         {
             return (int)value;
         }
 
         clear_console_output();
-        printf("Invalid choice. Please enter a number between 1 and 8.\n");
+        printf("Invalid choice. Please enter a number between 1 and 9.\n");
         display_menu();
     }
 }
@@ -3051,6 +3451,7 @@ static void clear_record_storage(void)
     memset(machineID, 0, sizeof(machineID));
     memset(maintenanceDate, 0, sizeof(maintenanceDate));
     memset(maintenanceDetails, 0, sizeof(maintenanceDetails));
+    memset(recordActive, 0, sizeof(recordActive));
     record_count = 0;
 }
 
@@ -3071,10 +3472,6 @@ void sanitize_input(char *buffer)
     if (buffer[len] != '\0')
     {
         buffer[len] = '\0';
-    }
-    else
-    {
-        flush_line();
     }
 
     trim_whitespace(buffer);

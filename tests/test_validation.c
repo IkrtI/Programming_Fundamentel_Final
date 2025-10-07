@@ -123,6 +123,26 @@ static void test_sanitize_input(void)
     EXPECT_STREQ("Another Value", str2);
 }
 
+static void test_safe_input_accepts_eof_terminated_line(void)
+{
+    int saved_fd = -1;
+    FILE *temp = NULL;
+
+    if (redirect_stdin_from_string("EOF without newline", &saved_fd, &temp) != 0)
+    {
+        EXPECT_TRUE(0);
+        return;
+    }
+
+    char buffer[64];
+    int status = safe_input(buffer, sizeof(buffer), "Prompt: ");
+
+    restore_stdin(saved_fd, temp);
+
+    EXPECT_TRUE(status == INPUT_OK);
+    EXPECT_STREQ("EOF without newline", buffer);
+}
+
 static void test_is_non_empty(void)
 {
     EXPECT_TRUE(is_non_empty("Hello"));
@@ -293,7 +313,7 @@ static void test_ensure_csv_exists_creates_blank_when_declined(void)
         buffer[read] = '\0';
         fclose(created);
 
-        EXPECT_STREQ("MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n", buffer);
+        EXPECT_STREQ("MachineName,MachineID,MaintenanceDate,MaintenanceDetails,Active\n", buffer);
     }
 
     unlink(path);
@@ -394,6 +414,7 @@ int main(void)
 {
     test_trim_whitespace();
     test_sanitize_input();
+    test_safe_input_accepts_eof_terminated_line();
     test_is_non_empty();
     test_contains_disallowed_csv_chars();
     test_is_valid_machine_name();
