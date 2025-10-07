@@ -30,17 +30,17 @@ project/
 gcc -std=c11 -Wall -Wextra -O2 -o maint main.c
 ```
 
+หรือใช้สคริปต์ที่เตรียมไว้ให้ช่วยตั้งค่ามาตรฐาน:
+
+```bash
+./build.sh          # Linux / macOS
+build.bat           # Windows
+```
+
 หากใช้ Clang แทน GCC สามารถสลับชื่อคอมไพเลอร์:
 
 ```bash
 clang -std=c11 -Wall -Wextra -O2 -o maint main.c
-```
-
-หรือใช้สคริปต์ `COMPILE` / `COMPILE.bat` ที่เตรียมไว้เพื่อสร้างทั้งไบนารีหลักและไฟล์ทดสอบภายใน:
-
-```bash
-./COMPILE          # Linux / macOS
-COMPILE.bat        # Windows
 ```
 
 ### ตัวเลือกเพิ่มเติม (ไม่บังคับ)
@@ -89,9 +89,12 @@ maint.exe        # บน Windows
 
 ### การรันทดสอบภายใน
 
-เมื่อใช้สคริปต์ `COMPILE` / `COMPILE.bat` จะได้ไฟล์ `maint_tests` (หรือ `maint_tests.exe`) สำหรับรันทดสอบในโปรเซสเดียวกับโปรแกรมหลัก:
+ถ้าต้องการให้เมนู **Test program** พร้อมใช้งานในไบนารีหลัก หรืออยากสร้างไฟล์ `maint_tests` สำหรับรันทดสอบในโปรเซสเดียวกัน ให้คอมไพล์ด้วยแฟล็ก `-DENABLE_INTERNAL_TESTS`:
 
 ```bash
+gcc -std=c11 -Wall -Wextra -O2 -DENABLE_INTERNAL_TESTS -I. -o maint main.c      # เปิดเมนู Test program ในไบนารีหลัก
+gcc -std=c11 -Wall -Wextra -O2 -DENABLE_INTERNAL_TESTS -I. -o maint_tests main.c # สร้างไบนารี maint_tests
+
 ./maint_tests --run-unit-tests
 ./maint_tests --run-e2e-tests
 ```

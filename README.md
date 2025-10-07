@@ -30,16 +30,16 @@ Machine Maintenance Manager
 
 ### Build
 
-สำหรับ Linux / macOS สามารถใช้สคริปต์ `COMPILE` เพื่อสร้างทั้งไบนารีหลักและชุดทดสอบภายในในคำสั่งเดียว:
+สำหรับ Linux / macOS ให้ใช้สคริปต์ `build.sh` ที่เตรียมไว้:
 
 ```bash
-./COMPILE
+./build.sh
 ```
 
-บน Windows ให้เรียก `COMPILE.bat` แทน (ภายในจะใช้ MinGW-w64 หรือ MSYS2 GCC):
+บน Windows ใช้ `build.bat` ซึ่งตั้งค่าพารามิเตอร์มาตรฐานให้แล้ว:
 
 ```bat
-COMPILE.bat
+build.bat
 ```
 
 หากต้องการคอมไพล์เองด้วยคำสั่งเดิมก็ยังใช้ได้:
@@ -48,10 +48,9 @@ COMPILE.bat
 gcc -std=c11 -Wall -Wextra -O2 -o maint main.c
 ```
 
-ทั้งสองสคริปต์จะสร้างไฟล์:
+ค่าเริ่มต้นจะสร้างไฟล์ปฏิบัติการหลัก `maint` (หรือ `maint.exe`)
 
-- `maint` หรือ `maint.exe` สำหรับรันโปรแกรมปกติ
-- `maint_tests` หรือ `maint_tests.exe` สำหรับรันชุดทดสอบในโปรเซสเดียวกับโปรแกรมหลัก
+> ✅ ต้องการให้เมนู **Test program** พร้อมทั้งไฟล์ `maint_tests`? คอมไพล์ด้วยแฟล็ก `-DENABLE_INTERNAL_TESTS` ดังตัวอย่างในหัวข้อ [Run automated tests](#run-automated-tests)
 
 ### Run
 
@@ -61,6 +60,12 @@ gcc -std=c11 -Wall -Wextra -O2 -o maint main.c
 
 ### Run automated tests
 
+คอมไพล์ไฟล์ทดสอบในโปรเซสเดียวกันด้วยคำสั่ง:
+
+```bash
+gcc -std=c11 -Wall -Wextra -O2 -DENABLE_INTERNAL_TESTS -I. -o maint_tests main.c
+```
+
 เมื่อมีไฟล์ `maint_tests` แล้ว สามารถรันชุดทดสอบได้โดยตรง (ไม่ต้องเรียกสคริปต์ภายนอก):
 
 ```bash
@@ -68,7 +73,7 @@ gcc -std=c11 -Wall -Wextra -O2 -o maint main.c
 ./maint_tests --run-e2e-tests
 ```
 
-ยังคงมีสคริปต์ `tests/run_unit_tests.*` และ `tests/run_e2e_tests.*` ให้ใช้ใน CI หรือการพัฒนา ซึ่งจะเรียกคอมไพล์ด้วยแฟล็กที่จำเป็นให้อัตโนมัติ
+ยังคงมีสคริปต์ `tests/run_unit_tests.*` และ `tests/run_e2e_tests.*` ให้ใช้ใน CI หรือการพัฒนา ซึ่งจะคอมไพล์ `main.c` พร้อมแฟล็ก `-DENABLE_INTERNAL_TESTS` ให้อัตโนมัติ
 
 เมื่อรันโปรแกรมจะพบเมนูจัดการไฟล์ CSV ก่อนเข้าสู่เมนูหลัก:
 
