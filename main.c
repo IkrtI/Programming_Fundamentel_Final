@@ -15,9 +15,10 @@
 #include <limits.h>
 #if defined(ENABLE_INTERNAL_TESTS)
 #include <stdarg.h>
+#endif
+
 #if defined(_WIN32)
 #include <io.h>
-#endif
 #endif
 
 #ifdef _WIN32
@@ -38,6 +39,7 @@
 static char csv_file_path[CSV_PATH_MAX] = CSV_FILE_DEFAULT;
 static const char *SAMPLE_CSV_FILE = "maintenance-example.csv";
 static const char CSV_HEADER[] = "MachineName,MachineID,MaintenanceDate,MaintenanceDetails\n";
+static int csv_prompts_enabled = 1;
 
 /* Portable UNUSED function attribute to silence unused warnings on some builds */
 #if !defined(UNUSED_FN)
@@ -101,6 +103,7 @@ static void print_record_preview_from_values(const char *name, const char *id,
 static int get_terminal_height(void);
 static int calculate_records_per_page(void);
 static void clear_console_output(void);
+static int is_stdin_interactive(void);
 static void UNUSED_FN clear_function_log(void);
 static void flush_line(void);
 static void request_exit(void);
@@ -122,6 +125,9 @@ static int prompt_yes_no_common(const char *prompt, const char *invalid_message,
                                 int error_default, int *out_choice);
 static void post_e2e_suite_notice(int status, int *menu_needs_clear);
 static int prompt_confirmation(const char *prompt, int *out_confirmed);
+#if defined(ENABLE_INTERNAL_TESTS)
+static void disable_csv_prompts(void);
+#endif
 
 #if !defined(_WIN32) && !defined(UNIT_TEST)
 static void restore_terminal_settings(void);
@@ -1454,6 +1460,15 @@ static void clear_console_output(void)
 
     printf("\033[2J\033[H");
     fflush(stdout);
+#endif
+}
+
+static int is_stdin_interactive(void)
+{
+#if defined(_WIN32)
+    return _isatty(_fileno(stdin));
+#else
+    return isatty(STDIN_FILENO);
 #endif
 }
 
@@ -2897,6 +2912,7 @@ int main(int argc, char *argv[])
         if (strcmp(argv[1], "--run-e2e-tests") == 0)
         {
             run_e2e_before_menu = 1;
+            disable_csv_prompts();
         }
     }
 #else
@@ -2933,13 +2949,7 @@ int main(int argc, char *argv[])
     remember_original_stdout();
 
     int csv_menu_status = 0;
-    int should_show_csv_menu = !run_e2e_before_menu;
-#if !defined(_WIN32)
-    if (should_show_csv_menu && !isatty(STDIN_FILENO))
-    {
-        should_show_csv_menu = 0;
-    }
-#endif
+    int should_show_csv_menu = !run_e2e_before_menu && is_stdin_interactive();
 
     if (should_show_csv_menu)
     {
@@ -3175,7 +3185,14 @@ int ensure_csv_exists(void)
     printf("No maintenance data file found at '%s'.\n", path);
 
     FILE *sample = fopen(SAMPLE_CSV_FILE, "r");
-    if (!sample)
+    int sample_available = 0;
+    if (sample)
+    {
+        sample_available = 1;
+        fclose(sample);
+    }
+
+    if (!sample_available)
     {
         printf("Sample file '%s' not found. Creating an empty maintenance file instead.\n", SAMPLE_CSV_FILE);
         if (write_blank_csv(path) != 0)
@@ -3187,7 +3204,23 @@ int ensure_csv_exists(void)
         return 0;
     }
 
-    fclose(sample);
+    if (!csv_prompts_enabled)
+    {
+        if (copy_example_csv(path) == 0)
+        {
+            printf("Created '%s' using sample data from '%s'.\n", path, SAMPLE_CSV_FILE);
+            return 0;
+        }
+
+        printf("Failed to copy sample data. Creating an empty maintenance file instead.\n");
+        if (write_blank_csv(path) != 0)
+        {
+            return -1;
+        }
+
+        printf("Created empty maintenance file at '%s'.\n", path);
+        return 0;
+    }
 
     int choice = prompt_copy_from_sample();
     if (choice < 0)
@@ -3309,6 +3342,13 @@ static int copy_example_csv(const char *path)
 
     return error ? -1 : 0;
 }
+
+#if defined(ENABLE_INTERNAL_TESTS)
+static void disable_csv_prompts(void)
+{
+    csv_prompts_enabled = 0;
+}
+#endif
 
 int load_records(void)
 {
