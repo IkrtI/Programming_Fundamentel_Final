@@ -113,6 +113,9 @@ static int is_machine_id_unique(const char *id);
 static int find_smallest_available_machine_id(void);
 static int prompt_machine_id(char *buffer, size_t size);
 static int string_contains_case_insensitive(const char *haystack, const char *needle);
+static int prompt_yes_no_common(const char *prompt, const char *invalid_message,
+                                int allow_blank_default, int default_choice,
+                                int error_default, int *out_choice);
 static int prompt_confirmation(const char *prompt, int *out_confirmed);
 
 #if !defined(_WIN32) && !defined(UNIT_TEST)
@@ -598,54 +601,57 @@ static int prompt_machine_id(char *buffer, size_t size)
     }
 }
 
-static int prompt_confirmation(const char *prompt, int *out_confirmed)
+static int prompt_yes_no_common(const char *prompt, const char *invalid_message,
+                                int allow_blank_default, int default_choice,
+                                int error_default, int *out_choice)
 {
-    if (!out_confirmed)
-    {
+    if (!out_choice)
         return INPUT_ERROR;
-    }
 
-    while (1)
+    for (;;)
     {
         char response[8];
         int status = safe_input(response, sizeof(response), prompt);
+
         if (status == INPUT_TOO_LONG)
         {
-            printf("Please enter Y or N.\n");
+            if (invalid_message)
+                printf("%s\n", invalid_message);
             continue;
         }
-
         if (status == INPUT_ERROR)
         {
-            *out_confirmed = 1;
-            return INPUT_OK;
-        }
-
-        if (status != INPUT_OK)
-        {
+            if (error_default >= 0)
+            {
+                *out_choice = error_default;
+                return INPUT_OK;
+            }
             return status;
         }
-
-        if (response[0] == '\0')
+        if (status != INPUT_OK)
+            return status;
+        char choice = response[0];
+        if (!choice)
         {
-            *out_confirmed = 1;
-            return INPUT_OK;
+            if (allow_blank_default)
+            {
+                *out_choice = default_choice;
+                return INPUT_OK;
+            }
+            if (invalid_message)
+                printf("%s\n", invalid_message);
+            continue;
         }
-
-        if (response[0] == 'Y' || response[0] == 'y')
-        {
-            *out_confirmed = 1;
-            return INPUT_OK;
-        }
-
-        if (response[0] == 'N' || response[0] == 'n')
-        {
-            *out_confirmed = 0;
-            return INPUT_OK;
-        }
-
-        printf("Please enter Y or N.\n");
+        if (choice == 'Y' || choice == 'y') { *out_choice = 1; return INPUT_OK; }
+        if (choice == 'N' || choice == 'n') { *out_choice = 0; return INPUT_OK; }
+        if (invalid_message)
+            printf("%s\n", invalid_message);
     }
+}
+
+static int prompt_confirmation(const char *prompt, int *out_confirmed)
+{
+    return prompt_yes_no_common(prompt, "Please enter Y or N.", 1, 1, 1, out_confirmed);
 }
 
 static int copy_csv_file(const char *source, const char *destination)
@@ -3102,61 +3108,18 @@ int ensure_csv_exists(void)
 static int prompt_copy_from_sample(void)
 {
     char prompt[128];
-    snprintf(prompt, sizeof(prompt), "Copy sample data from %s? (y/n, Ctrl+X cancel, Ctrl+Z back): ", SAMPLE_CSV_FILE);
+    snprintf(prompt, sizeof(prompt),
+             "Copy sample data from %s? (y/n, Ctrl+X cancel, Ctrl+Z back): ",
+             SAMPLE_CSV_FILE);
 
-    while (1)
-    {
-        char response[8];
-        int status = safe_input(response, sizeof(response), prompt);
-
-        if (status == INPUT_EXIT)
-        {
-            return INPUT_EXIT;
-        }
-
-        if (status == INPUT_BACK)
-        {
-            return INPUT_CANCELLED;
-        }
-
-        if (status == INPUT_CANCELLED)
-        {
-            return INPUT_CANCELLED;
-        }
-
-        if (status == INPUT_TOO_LONG)
-        {
-            continue;
-        }
-
-        if (status == INPUT_ERROR)
-        {
-            return INPUT_ERROR;
-        }
-
-        if (status != INPUT_OK)
-        {
-            continue;
-        }
-
-        if (response[0] == '\0')
-        {
-            printf("Please enter 'y' or 'n'.\n");
-            continue;
-        }
-
-        char c = (char)tolower((unsigned char)response[0]);
-        if (c == 'y')
-        {
-            return 1;
-        }
-        if (c == 'n')
-        {
-            return 0;
-        }
-
-        printf("Please enter 'y' or 'n'.\n");
-    }
+    int choice = 0;
+    int status = prompt_yes_no_common(prompt, "Please enter 'y' or 'n'.", 0, 0, -1,
+                                      &choice);
+    if (status == INPUT_BACK)
+        return INPUT_CANCELLED;
+    if (status != INPUT_OK)
+        return status;
+    return choice;
 }
 
 static int write_blank_csv(const char *path)
