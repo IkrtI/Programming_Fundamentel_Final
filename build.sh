@@ -2,7 +2,7 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CC=${CC:-gcc}
-CFLAGS="${CFLAGS:--std=c11 -Wall -Wextra -O2}"
+CFLAGS="${CFLAGS:--std=c11 -Wall -Wextra -O2 -fno-common}"
 EXTRA_DEFINES="-DENABLE_INTERNAL_TESTS"
 OUTPUT="$SCRIPT_DIR/maint"
 SRC="$SCRIPT_DIR/main.c"

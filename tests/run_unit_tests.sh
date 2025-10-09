@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 UNIT_BIN="$ROOT_DIR/maint_tests"
 
-gcc -std=c11 -O2 -Wall -Wextra -DENABLE_INTERNAL_TESTS -I"$ROOT_DIR" \
+gcc -std=c11 -O2 -Wall -Wextra -fno-common -DENABLE_INTERNAL_TESTS -I"$ROOT_DIR" \
     -o "$UNIT_BIN" "$ROOT_DIR/main.c"
 
 cd "$ROOT_DIR"
