@@ -54,6 +54,10 @@ char maintenanceDate[MAX_RECORDS][MAX_DATE];
 char maintenanceDetails[MAX_RECORDS][MAX_DETAILS];
 int record_count = 0;
 
+#if defined(ENABLE_INTERNAL_TESTS)
+static int original_stdout_fd = -1;
+#endif
+
 static record_result_t add_record_direct(const char *name, const char *id,
                                          const char *date, const char *details);
 static record_result_t delete_record_direct(const char *id);
@@ -198,8 +202,23 @@ static int UNUSED_FN exit_program(int status)
 #if !defined(_WIN32)
     restore_terminal_settings();
 #endif
+#if defined(ENABLE_INTERNAL_TESTS)
+    clear_record_storage();
+    if (original_stdout_fd >= 0)
+    {
+#if defined(_WIN32)
+    _close(original_stdout_fd);
+        original_stdout_fd = -1;
+#else
+        close(original_stdout_fd);
+        original_stdout_fd = -1;
+#endif
+    }
+    return status;
+#else
     clear_record_storage();
     return status;
+#endif
 }
 #endif
 
@@ -2513,6 +2532,23 @@ static char *stop_stdout_capture(FILE *capture_file, int saved_fd)
     return buffer;
 }
 
+static void remember_original_stdout(void)
+{
+    if (original_stdout_fd < 0)
+    {
+        original_stdout_fd = maintenance_dup(maintenance_fileno(stdout));
+    }
+}
+
+static void ensure_primary_stdout(void)
+{
+    if (original_stdout_fd >= 0)
+    {
+        fflush(stdout);
+        maintenance_dup2(original_stdout_fd, maintenance_fileno(stdout));
+    }
+}
+
 static int count_csv_rows(const char *path)
 {
     FILE *f = fopen(path, "r");
@@ -2830,6 +2866,16 @@ static int run_internal_e2e_tests(void)
 
 #endif /* ENABLE_INTERNAL_TESTS */
 
+#if !defined(ENABLE_INTERNAL_TESTS)
+static void remember_original_stdout(void)
+{
+}
+
+static void ensure_primary_stdout(void)
+{
+}
+#endif
+
 #ifndef UNIT_TEST
 void display_menu(void);
 int read_menu_choice(void);
@@ -2883,6 +2929,8 @@ int main(int argc, char *argv[])
         return exit_program(1);
     }
 #endif
+
+    remember_original_stdout();
 
     int csv_menu_status = show_csv_control_menu();
     if (exit_requested || interrupt_requested)
@@ -3043,6 +3091,7 @@ static int run_unit_test_suite(void)
     }
     fflush(stdout);
     fflush(stderr);
+    ensure_primary_stdout();
     return status;
 #else
     printf("Unit test suite is not available in this build. Rebuild with ENABLE_INTERNAL_TESTS defined.\n");
@@ -3067,6 +3116,7 @@ static int run_end_to_end_suite(void)
     }
     fflush(stdout);
     fflush(stderr);
+    ensure_primary_stdout();
     return status;
 #else
     printf("End-to-end tests are not available in this build. Rebuild with ENABLE_INTERNAL_TESTS defined.\n");
