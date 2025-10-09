@@ -2963,8 +2963,14 @@ int main(int argc, char *argv[])
             (void)run_unit_test_suite();
             break;
         case 8:
-            (void)run_end_to_end_suite();
-            break;
+        {
+            int e2e_status = run_end_to_end_suite();
+            printf("End-to-end tests finished. Exiting...\n");
+            fflush(stdout);
+            fprintf(stderr, "End-to-end tests finished. Exiting...\n");
+            fflush(stderr);
+            return exit_program(e2e_status == 0 ? 0 : 1);
+        }
         case 9:
             printf("Exiting...\n");
             exit_requested = 1;
