@@ -2932,16 +2932,28 @@ int main(int argc, char *argv[])
 
     remember_original_stdout();
 
-    int csv_menu_status = show_csv_control_menu();
-    if (exit_requested || interrupt_requested)
+    int csv_menu_status = 0;
+    int should_show_csv_menu = !run_e2e_before_menu;
+#if !defined(_WIN32)
+    if (should_show_csv_menu && !isatty(STDIN_FILENO))
     {
-        printf("\nHotkey detected. Cleaning up and exiting...\n");
-        return exit_program(0);
+        should_show_csv_menu = 0;
     }
+#endif
 
-    if (csv_menu_status < 0)
+    if (should_show_csv_menu)
     {
-        return exit_program(1);
+        csv_menu_status = show_csv_control_menu();
+        if (exit_requested || interrupt_requested)
+        {
+            printf("\nHotkey detected. Cleaning up and exiting...\n");
+            return exit_program(0);
+        }
+
+        if (csv_menu_status < 0)
+        {
+            return exit_program(1);
+        }
     }
 
     int ensure_status = ensure_csv_exists();
@@ -2967,8 +2979,9 @@ int main(int argc, char *argv[])
         int status = run_end_to_end_suite();
         if (!exit_requested && !interrupt_requested)
         {
-            post_e2e_suite_notice(status, &menu_needs_clear);
+            return exit_program(status == 0 ? 0 : 1);
         }
+        return exit_program(0);
     }
 
     do
