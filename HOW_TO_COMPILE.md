@@ -1,5 +1,4 @@
-# HOW TO COMPILE
-โปรดใช้ wsl ในการทำงาน
+# HOW TO COMPILE ( โปรดใช้ wsl ในการทำงาน )
 
 เอกสารนี้อธิบายขั้นตอนการคอมไพล์โปรแกรม Machine Maintenance Manager จากซอร์สโค้ดหลัก `main.c` บนแพลตฟอร์มยอดนิยม
 
