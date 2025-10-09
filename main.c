@@ -3051,7 +3051,7 @@ int main(int argc, char *argv[])
             break;
         case 8:
         {
-            int status = run_end_to_end_suite();
+            (void)run_end_to_end_suite();
             break;
         }
         case 9:
