@@ -2836,6 +2836,7 @@ int read_menu_choice(void);
 int main(int argc, char *argv[])
 {
     int choice = 0;
+    int run_e2e_before_menu = 0;
 
 #if defined(ENABLE_INTERNAL_TESTS)
     if (argc > 1)
@@ -2847,8 +2848,7 @@ int main(int argc, char *argv[])
         }
         if (strcmp(argv[1], "--run-e2e-tests") == 0)
         {
-            int status = run_end_to_end_suite();
-            return exit_program(status == 0 ? 0 : 1);
+            run_e2e_before_menu = 1;
         }
     }
 #else
@@ -2910,6 +2910,22 @@ int main(int argc, char *argv[])
     {
         printf("Failed to load records.\n");
         return exit_program(1);
+    }
+
+    if (run_e2e_before_menu && !exit_requested && !interrupt_requested)
+    {
+        int status = run_end_to_end_suite();
+        if (!exit_requested && !interrupt_requested)
+        {
+            if (status == 0)
+            {
+                printf("\nReturning to the main menu...\n");
+            }
+            else
+            {
+                printf("\nReturning to the main menu so you can review issues or rerun the suite.\n");
+            }
+        }
     }
 
     do
