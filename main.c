@@ -123,7 +123,6 @@ static int string_contains_case_insensitive(const char *haystack, const char *ne
 static int prompt_yes_no_common(const char *prompt, const char *invalid_message,
                                 int allow_blank_default, int default_choice,
                                 int error_default, int *out_choice);
-static void post_e2e_suite_notice(int status, int *menu_needs_clear);
 static int prompt_confirmation(const char *prompt, int *out_confirmed);
 #if defined(ENABLE_INTERNAL_TESTS)
 static void disable_csv_prompts(void);
@@ -3053,11 +3052,6 @@ int main(int argc, char *argv[])
         case 8:
         {
             int status = run_end_to_end_suite();
-            if (!exit_requested && !interrupt_requested)
-            {
-                post_e2e_suite_notice(status, &menu_needs_clear);
-                continue;
-            }
             break;
         }
         case 9:
@@ -3147,30 +3141,6 @@ static int run_end_to_end_suite(void)
 #endif
 }
 #endif
-
-static void post_e2e_suite_notice(int status, int *menu_needs_clear)
-{
-    if (exit_requested || interrupt_requested)
-    {
-        return;
-    }
-
-    if (status == 0)
-    {
-        printf("\nReturning to the main menu...\n");
-    }
-    else
-    {
-        printf("\nReturning to the main menu so you can review issues or rerun the suite.\n");
-    }
-
-    fflush(stdout);
-
-    if (menu_needs_clear)
-    {
-        *menu_needs_clear = 1;
-    }
-}
 
 int ensure_csv_exists(void)
 {
